@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OnChat</string>
+    <string name="reels_title">Reels &amp; Vidéos</string>
+    <string name="no_videos">Aucune vidéo disponible pour le moment.</string>
+    <string name="publish_video">Publier une vidéo</string>
+    <string name="comments">Commentaires</string>
+    <string name="add_comment">Ajouter un commentaire...</string>
+    <string name="like">Aimer</string>
+    <string name="share">Partager</string>
+    <string name="follow">S\'abonner</string>
+    <string name="following">Abonné</string>
+    <string name="followers_count">%1$d Abonnés</string>
+    <string name="following_count">%1$d Abonnements</string>
+</resources>

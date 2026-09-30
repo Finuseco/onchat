@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:padding="12dp"
+    android:gravity="center_vertical"
+    android:background="#0F172A">
+
+    <!-- Sender Avatar with colorful circular border (Left) -->
+    <ImageView
+        android:id="@+id/notif_sender_avatar"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:scaleType="centerCrop"
+        android:contentDescription="Avatar de l'expéditeur" />
+
+    <!-- Sender Name and Message Preview (Center) -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:orientation="vertical"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp">
+
+        <TextView
+            android:id="@+id/notif_sender_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="Expéditeur" />
+
+        <TextView
+            android:id="@+id/notif_message_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="#E2E8F0"
+            android:textSize="13sp"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:text="Aperçu du message..." />
+
+        <TextView
+            android:id="@+id/notif_message_sub"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="1dp"
+            android:textColor="#38BDF8"
+            android:textSize="11sp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="OnChat Message" />
+    </LinearLayout>
+
+    <!-- OnChat Circular App Logo Badge (Right) -->
+    <ImageView
+        android:id="@+id/notif_app_logo"
+        android:layout_width="38dp"
+        android:layout_height="38dp"
+        android:scaleType="centerCrop"
+        android:contentDescription="Logo OnChat" />
+</LinearLayout>

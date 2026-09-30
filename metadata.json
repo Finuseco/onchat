@@ -1,0 +1,6 @@
+{
+  "name": "OnChat",
+  "description": "Application officielle OnChat par CashPay - Messagerie instantanée sécurisée, groupes et appels.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
