@@ -33,7 +33,11 @@ object ApiClient {
         val request = requestBuilder.build()
         val response = chain.proceed(request)
 
-        if (response.code == 401) {
+        val path = original.url.encodedPath
+        val isAuthEndpoint = path.contains("/auth/") || path.contains("/login")
+        val hadToken = !authToken.isNullOrBlank()
+
+        if (response.code == 401 && hadToken && !isAuthEndpoint) {
             onUnauthorized?.invoke()
         }
 

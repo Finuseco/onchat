@@ -90,10 +90,7 @@ class MainActivity : ComponentActivity() {
                     }
                     loginStep != LoginStep.AUTHENTICATED -> {
                         LoginScreen(
-                            viewModel = viewModel,
-                            onLoginSuccess = {
-                                currentScreen = "main"
-                            }
+                            viewModel = viewModel
                         )
                     }
                     incomingCall != null -> {

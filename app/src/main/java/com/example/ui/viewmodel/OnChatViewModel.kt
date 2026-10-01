@@ -35,6 +35,15 @@ enum class AuthMethod {
     WALLET_ID
 }
 
+enum class ForgotPinFlowStep {
+    OFF,
+    ID_INPUT,
+    CHANNEL_SELECTION,
+    OTP_VERIFY,
+    NEW_PIN_INPUT,
+    SUCCESS
+}
+
 data class UiAuthError(
     val title: String,
     val message: String
@@ -130,6 +139,17 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _showPinForgotDialog = MutableStateFlow(false)
     val showPinForgotDialog: StateFlow<Boolean> = _showPinForgotDialog.asStateFlow()
+
+    private val _forgotPinStep = MutableStateFlow(ForgotPinFlowStep.OFF)
+    val forgotPinStep: StateFlow<ForgotPinFlowStep> = _forgotPinStep.asStateFlow()
+
+    fun startForgotPin(phone: String? = null) {
+        _forgotPinStep.value = ForgotPinFlowStep.ID_INPUT
+    }
+
+    fun closeForgotPin() {
+        _forgotPinStep.value = ForgotPinFlowStep.OFF
+    }
 
     private val _successMessage = MutableStateFlow<String?>(null)
     val successMessage: StateFlow<String?> = _successMessage.asStateFlow()
@@ -235,13 +255,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         com.example.data.api.SessionTokenStore.init(application)
         ApiClient.onUnauthorized = {
             viewModelScope.launch {
+                val wasAuthenticated = _loginStep.value == LoginStep.AUTHENTICATED
                 wsManager.disconnect()
                 repository.logout()
                 _loginStep.value = LoginStep.WALLET_ID
-                _authError.value = UiAuthError(
-                    title = "Session expirée",
-                    message = "Votre session CashPay a expiré. Veuillez vous reconnecter."
-                )
+                if (wasAuthenticated) {
+                    _authError.value = UiAuthError(
+                        title = "Session expirée",
+                        message = "Votre session CashPay a expiré. Veuillez vous reconnecter."
+                    )
+                }
             }
         }
         loadCountries()
@@ -252,20 +275,22 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             refreshWallet()
         }
 
-        // Active background sync loop to guarantee 100% zero missed messages or statuses
+        // Active background sync loop to guarantee 100% zero missed messages or statuses (only when authenticated)
         viewModelScope.launch {
             while (isActive) {
                 delay(4500)
                 try {
-                    repository.fetchConversations()
-                    val activeId = _activeConversationId.value
-                    if (!activeId.isNullOrBlank()) {
-                        repository.fetchConversationDetails(activeId)
+                    if (_loginStep.value == LoginStep.AUTHENTICATED && !ApiClient.authToken.isNullOrBlank()) {
+                        repository.fetchConversations()
+                        val activeId = _activeConversationId.value
+                        if (!activeId.isNullOrBlank()) {
+                            repository.fetchConversationDetails(activeId)
+                        }
+                        repository.fetchStatusesFromServer()
+                        repository.fetchVideos()
+                        // Cleanup expired statuses from local DB
+                        repository.repositoryCleanup()
                     }
-                    repository.fetchStatusesFromServer()
-                    repository.fetchVideos()
-                    // Cleanup expired statuses from local DB
-                    repository.repositoryCleanup()
                 } catch (_: Exception) {}
             }
         }
@@ -488,15 +513,18 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 val isValid = repository.checkSession()
                 if (isValid) {
                     _loginStep.value = LoginStep.AUTHENTICATED
+                    _authError.value = null
                     wsManager.connect()
                     fetchServerConversations()
                     fetchTransactions()
                     refreshWallet()
                 } else {
                     _loginStep.value = LoginStep.WALLET_ID
+                    _authError.value = null
                 }
             } else {
                 _loginStep.value = LoginStep.WALLET_ID
+                _authError.value = null
             }
 
             _isSkeletonLoading.value = false
@@ -1127,6 +1155,15 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             }.onFailure { err ->
                 _errorMessage.value = "Impossible de publier le commentaire: ${err.message}"
                 onResult(null)
+            }
+        }
+    }
+
+    fun deleteVideo(videoId: Long) {
+        viewModelScope.launch {
+            val result = repository.deleteVideo(videoId)
+            result.onSuccess {
+                _realVideosFeed.value = _realVideosFeed.value.filter { it.id != videoId }
             }
         }
     }

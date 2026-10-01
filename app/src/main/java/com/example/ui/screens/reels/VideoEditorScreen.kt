@@ -271,14 +271,14 @@ fun VideoEditorScreen(
                     }
                 }
 
-                // Official OnChat Two-Tone Signature Watermark (Raised above controls)
+                // Official OnChat Two-Tone Signature Watermark (Top-Left side, non-intrusive)
                 OnChatSignatureWatermark(
                     modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 16.dp, bottom = 16.dp),
-                    fontSize = 18.sp,
+                        .align(Alignment.TopStart)
+                        .padding(start = 16.dp, top = 16.dp),
+                    fontSize = 17.sp,
                     withBackground = true,
-                    animatedGlow = true
+                    animatedGlow = false
                 )
             }
 
@@ -294,8 +294,9 @@ fun VideoEditorScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val formattedSec = String.format("%.1f", currentDuration)
+                    val startSec = String.format("%.1f", totalDurationSeconds * trimStartRatio)
                     Text(
-                        text = "00:02 / 00:0$formattedSec",
+                        text = "00:0$startSec / 00:0$formattedSec (${((trimEndRatio - trimStartRatio) * 100).toInt()}%)",
                         color = Color.White.copy(alpha = 0.8f),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
@@ -325,7 +326,7 @@ fun VideoEditorScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(44.dp)
+                        .height(48.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF27272A)),
                     contentAlignment = Alignment.CenterStart
@@ -338,14 +339,29 @@ fun VideoEditorScreen(
                             .background(OnChatViolet.copy(alpha = 0.75f))
                     )
 
-                    // Left Trimmer Handle
+                    // Interactive Left Trimmer Handle (Drag to adjust start)
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
-                            .width(12.dp)
+                            .width(18.dp)
                             .fillMaxHeight()
                             .background(OnChatCyan)
-                    )
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val delta = dragAmount.x / 1000f
+                                    trimStartRatio = (trimStartRatio + delta).coerceIn(0f, trimEndRatio - 0.1f)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .height(16.dp)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                        )
+                    }
 
                     // Scrub playhead vertical indicator
                     Box(
@@ -356,14 +372,29 @@ fun VideoEditorScreen(
                             .background(Color.White)
                     )
 
-                    // Right Trimmer Handle
+                    // Interactive Right Trimmer Handle (Drag to adjust end)
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
-                            .width(12.dp)
+                            .width(18.dp)
                             .fillMaxHeight()
                             .background(OnChatMagenta)
-                    )
+                            .pointerInput(Unit) {
+                                detectDragGestures { change, dragAmount ->
+                                    change.consume()
+                                    val delta = dragAmount.x / 1000f
+                                    trimEndRatio = (trimEndRatio + delta).coerceIn(trimStartRatio + 0.1f, 1f)
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(2.dp)
+                                .height(16.dp)
+                                .background(Color.Black.copy(alpha = 0.6f))
+                        )
+                    }
                 }
             }
 

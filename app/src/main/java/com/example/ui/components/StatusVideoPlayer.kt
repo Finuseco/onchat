@@ -46,6 +46,7 @@ fun StatusVideoPlayer(
     videoUrl: String,
     modifier: Modifier = Modifier,
     isPaused: Boolean = false,
+    showWatermark: Boolean = true,
     onVideoEnded: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -155,15 +156,17 @@ fun StatusVideoPlayer(
             }
         }
 
-        // Official Two-Tone OnChat Signature Watermark (Raised above controls)
-        OnChatSignatureWatermark(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 120.dp),
-            fontSize = 18.sp,
-            withBackground = true,
-            animatedGlow = true
-        )
+        // Official Two-Tone OnChat Signature Watermark (Top-Left side, non-intrusive)
+        if (showWatermark) {
+            OnChatSignatureWatermark(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = 16.dp, top = 88.dp),
+                fontSize = 17.sp,
+                withBackground = true,
+                animatedGlow = false
+            )
+        }
 
         // Precise looping progress bar at the bottom of the video player (Real Progression)
         val progressPercent = if (duration > 0) currentPosition.toFloat() / duration.toFloat() else 0f

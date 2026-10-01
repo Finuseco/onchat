@@ -470,13 +470,17 @@ fun ReelItemView(
                 }
             )
 
-            // Save / Download Video
+            // Save / Download Video (Real device download)
             InteractionButton(
                 icon = Icons.Default.Download,
                 label = "Save",
                 iconColor = OnChatCyan,
                 onClick = {
-                    Toast.makeText(context, "Téléchargement du média CashPay en cours ⚡", Toast.LENGTH_SHORT).show()
+                    com.example.ui.screens.profile.downloadVideoToStorage(
+                        context = context,
+                        videoUrl = video.resolvedUrl,
+                        creatorName = creatorName
+                    )
                 }
             )
 
