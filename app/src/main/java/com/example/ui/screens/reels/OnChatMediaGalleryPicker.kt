@@ -152,6 +152,16 @@ fun OnChatMediaGalleryPicker(
         isLoading = false
     }
 
+    val photoPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            val mimeType = context.contentResolver.getType(uri) ?: ""
+            val type = if (mimeType.contains("video")) "video" else "image"
+            onMediaSelected(uri.toString(), type)
+        }
+    }
+
     // Extracted Unique Folders (Buckets)
     val availableBuckets = remember(mediaItems) {
         mediaItems.map { it.bucketName }.distinct().sorted()
@@ -192,6 +202,19 @@ fun OnChatMediaGalleryPicker(
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.Close, contentDescription = "Fermer", tint = Color.White)
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            photoPickerLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(
+                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                                )
+                            )
+                        }
+                    ) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = "Parcourir", tint = OnChatCyan)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = CashPayNavySurface)
@@ -301,11 +324,27 @@ fun OnChatMediaGalleryPicker(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Autorisez l'accès aux photos et vidéos ou enregistrez un média avec la caméra.",
+                            text = "Autorisez l'accès aux photos et vidéos ou parcourez directement vos dossiers.",
                             color = CashPayGrey,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
                         )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    androidx.activity.result.PickVisualMediaRequest(
+                                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageAndVideo
+                                    )
+                                )
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = OnChatViolet),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Color.White)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Parcourir les fichiers de l'appareil", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             } else {

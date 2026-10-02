@@ -17,17 +17,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.ui.theme.*
 
-enum class OnChatTab(val title: String) {
-    CHATS("Chat"),
-    GROUPS("Groupes"),
-    STATUS("Actu"),
-    CALLS("Appels"),
-    CONTACTS("Contacts")
+enum class OnChatTab(val title: String, val icon: ImageVector) {
+    CHATS("Chat", Icons.Default.Chat),
+    GROUPS("Groupes", Icons.Default.Groups),
+    STATUS("Actu", Icons.Default.MotionPhotosOn),
+    CALLS("Appels", Icons.Default.Call),
+    CONTACTS("Contacts", Icons.Default.People)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

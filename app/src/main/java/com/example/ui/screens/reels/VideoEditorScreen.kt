@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,7 +31,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ui.components.OnChatSignatureWatermark
 import com.example.ui.components.StatusVideoPlayer
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.OnChatViewModel
@@ -72,7 +72,8 @@ fun VideoEditorScreen(
     // 2. Audio & Sound
     var isAudioMuted by remember { mutableStateOf(false) }
     var audioVolume by remember { mutableFloatStateOf(1.0f) }
-    var selectedMusicTitle by remember { mutableStateOf<String?>("Son original") }
+    var musicVolume by remember { mutableFloatStateOf(0.7f) }
+    var selectedMusicTitle by remember { mutableStateOf("Son original") }
 
     // 3. Text Overlays
     val textOverlays = remember { mutableStateListOf<TextOverlayItem>() }
@@ -107,8 +108,12 @@ fun VideoEditorScreen(
     }
 
     // 5. Captions
-    var subtitleText by remember { mutableStateOf("DITES-LEUR, ET SURTOUT...") }
-    var showSubtitles by remember { mutableStateOf(true) }
+    var subtitleText by remember { mutableStateOf("") }
+    var showSubtitles by remember { mutableStateOf(false) }
+
+    // 6. AI Magic Prompt State
+    var aiPrompt by remember { mutableStateOf("") }
+    var isAiGenerating by remember { mutableStateOf(false) }
 
     // Real upload progress when publishing to server
     LaunchedEffect(isPublishing) {
@@ -145,7 +150,7 @@ fun VideoEditorScreen(
                 onPublish(finalUrl ?: mediaUri, caption)
             } else {
                 isPublishing = false
-                Toast.makeText(context, "Échec de l'envoi vidéo au serveur CashPay. Vérifiez la connexion.", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Échec de l'envoi vidéo au serveur. Vérifiez la connexion.", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -172,7 +177,7 @@ fun VideoEditorScreen(
                 }
 
                 Text(
-                    text = "Éditeur OnChat (Max 10 min)",
+                    text = "Éditeur Vidéo OnChat",
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp
@@ -190,7 +195,7 @@ fun VideoEditorScreen(
                             )
                         )
                 ) {
-                    Icon(Icons.Default.ArrowForward, contentDescription = "Publier", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Publier", tint = Color.White)
                 }
             }
 
@@ -220,7 +225,7 @@ fun VideoEditorScreen(
                     )
                 }
 
-                // Subtitles Layer (as seen in Screenshot 2: "DITES-LEUR. ET SURTOUT")
+                // Subtitles Layer (Dynamic)
                 if (showSubtitles && subtitleText.isNotBlank()) {
                     Box(
                         modifier = Modifier
@@ -232,7 +237,7 @@ fun VideoEditorScreen(
                     ) {
                         Text(
                             text = subtitleText,
-                            color = Color(0xFFFFEB3B), // Vibrant Yellow Subtitle
+                            color = Color(0xFFFFEB3B),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Black,
                             letterSpacing = 0.5.sp,
@@ -270,19 +275,9 @@ fun VideoEditorScreen(
                         )
                     }
                 }
-
-                // Official OnChat Two-Tone Signature Watermark (Top-Left side, non-intrusive)
-                OnChatSignatureWatermark(
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(start = 16.dp, top = 16.dp),
-                    fontSize = 17.sp,
-                    withBackground = true,
-                    animatedGlow = false
-                )
             }
 
-            // Timeline Scrub & Trimmer Bar (Matching Screenshot 2)
+            // Timeline Scrub & Trimmer Bar
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -311,12 +306,6 @@ fun VideoEditorScreen(
                                 modifier = Modifier.padding(end = 8.dp)
                             )
                         }
-                        Icon(
-                            imageVector = Icons.Default.Fullscreen,
-                            contentDescription = "Plein écran",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
                     }
                 }
 
@@ -326,12 +315,11 @@ fun VideoEditorScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
+                        .height(44.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF27272A)),
                     contentAlignment = Alignment.CenterStart
                 ) {
-                    // Active Selected Trim Range
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(trimEndRatio - trimStartRatio)
@@ -339,7 +327,6 @@ fun VideoEditorScreen(
                             .background(OnChatViolet.copy(alpha = 0.75f))
                     )
 
-                    // Interactive Left Trimmer Handle (Drag to adjust start)
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
@@ -349,30 +336,12 @@ fun VideoEditorScreen(
                             .pointerInput(Unit) {
                                 detectDragGestures { change, dragAmount ->
                                     change.consume()
-                                    val delta = dragAmount.x / 1000f
-                                    trimStartRatio = (trimStartRatio + delta).coerceIn(0f, trimEndRatio - 0.1f)
+                                    val newStart = (trimStartRatio + dragAmount.x / 400f).coerceIn(0f, trimEndRatio - 0.1f)
+                                    trimStartRatio = newStart
                                 }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(2.dp)
-                                .height(16.dp)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                        )
-                    }
-
-                    // Scrub playhead vertical indicator
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .width(3.dp)
-                            .fillMaxHeight()
-                            .background(Color.White)
+                            }
                     )
 
-                    // Interactive Right Trimmer Handle (Drag to adjust end)
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
@@ -382,71 +351,112 @@ fun VideoEditorScreen(
                             .pointerInput(Unit) {
                                 detectDragGestures { change, dragAmount ->
                                     change.consume()
-                                    val delta = dragAmount.x / 1000f
-                                    trimEndRatio = (trimEndRatio + delta).coerceIn(trimStartRatio + 0.1f, 1f)
+                                    val newEnd = (trimEndRatio + dragAmount.x / 400f).coerceIn(trimStartRatio + 0.1f, 1f)
+                                    trimEndRatio = newEnd
                                 }
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(2.dp)
-                                .height(16.dp)
-                                .background(Color.Black.copy(alpha = 0.6f))
-                        )
-                    }
+                            }
+                    )
                 }
             }
 
-            // Caption Input Field
+            // Caption Text Input Box
             OutlinedTextField(
                 value = caption,
                 onValueChange = { caption = it },
-                placeholder = { Text("Écrire une légende avec #hashtags...", color = Color.Gray) },
+                placeholder = { Text("Écrire une légende avec #hashtags...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = OnChatCyan,
+                    unfocusedBorderColor = Color(0xFF3F3F46),
+                    focusedContainerColor = Color(0xFF18181B),
+                    unfocusedContainerColor = Color(0xFF18181B)
+                ),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 2.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = OnChatCyan,
-                    unfocusedBorderColor = Color.DarkGray,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                ),
-                shape = RoundedCornerShape(12.dp),
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                shape = RoundedCornerShape(10.dp),
                 maxLines = 2
             )
 
-            // Dynamic Contextual Tool Panel (Appears based on selected tool)
-            AnimatedVisibility(visible = selectedTool != null) {
+            // Dynamic Tool Action Panels
+            AnimatedVisibility(
+                visible = selectedTool != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFF1E1E24)
+                    color = Color(0xFF1F1F23)
                 ) {
                     when (selectedTool) {
                         "Modifier" -> {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text("Vitesse:", color = Color.White, fontSize = 13.sp)
+                                Text("Vitesse:", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                 listOf(0.5f, 1.0f, 1.5f, 2.0f).forEach { speed ->
-                                    FilterChip(
-                                        selected = playbackSpeed == speed,
+                                    val isSelected = playbackSpeed == speed
+                                    Button(
                                         onClick = { playbackSpeed = speed },
-                                        label = { Text("${speed}x", fontSize = 12.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = OnChatCyan,
-                                            selectedLabelColor = Color.Black,
-                                            labelColor = Color.White
-                                        )
-                                    )
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelected) OnChatCyan else Color(0xFF3F3F46)
+                                        ),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("${speed}x", color = if (isSelected) Color.Black else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
                         "Son" -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text("Piste audio active : $selectedMusicTitle", color = OnChatCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
+                                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    listOf("Son original", "Afrobeat Mix", "Cinematic Bounce", "Future Chill").forEach { track ->
+                                        FilterChip(
+                                            selected = selectedMusicTitle == track,
+                                            onClick = { selectedMusicTitle = track },
+                                            label = { Text(track, fontSize = 11.sp) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = OnChatCyan,
+                                                selectedLabelColor = Color.Black
+                                            )
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Volume voix:", color = Color.White, fontSize = 12.sp)
+                                    Slider(
+                                        value = audioVolume,
+                                        onValueChange = { audioVolume = it },
+                                        valueRange = 0f..2f,
+                                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                                        colors = SliderDefaults.colors(thumbColor = OnChatCyan, activeTrackColor = OnChatCyan)
+                                    )
+                                    Text("${(audioVolume * 100).toInt()}%", color = Color.White, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                        "Texte" -> {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -457,69 +467,33 @@ fun VideoEditorScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = if (isAudioMuted) "Audio coupé" else "Volume original: ${(audioVolume * 100).toInt()}%",
-                                        color = Color.White,
-                                        fontSize = 13.sp
-                                    )
-                                    IconButton(onClick = { isAudioMuted = !isAudioMuted }) {
-                                        Icon(
-                                            imageVector = if (isAudioMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                                            contentDescription = "Mute",
-                                            tint = if (isAudioMuted) Color.Red else OnChatCyan
-                                        )
-                                    }
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
                                     Button(
-                                        onClick = {
-                                            selectedMusicTitle = "Son original extrait"
-                                            Toast.makeText(context, "Audio extrait avec succès 🎵", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = OnChatViolet)
+                                        onClick = { showAddTextDialog = true },
+                                        colors = ButtonDefaults.buttonColors(containerColor = OnChatMagenta),
+                                        shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Icon(Icons.Default.ContentCut, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Séparer Audio", fontSize = 11.sp)
+                                        Text("Ajouter du texte", fontSize = 12.sp)
                                     }
-                                    Button(
-                                        onClick = {
-                                            selectedMusicTitle = "Beats CashPay Pop"
-                                            Toast.makeText(context, "Musique ajoutée 🎧", Toast.LENGTH_SHORT).show()
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = OnChatCyan)
-                                    ) {
-                                        Icon(Icons.Default.LibraryMusic, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Ajouter Musique", color = Color.Black, fontSize = 11.sp)
+                                    if (textOverlays.isNotEmpty()) {
+                                        TextButton(onClick = { textOverlays.clear() }) {
+                                            Text("Effacer tout", color = Color.Red, fontSize = 12.sp)
+                                        }
                                     }
-                                }
-                            }
-                        }
-                        "Texte" -> {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Button(
-                                    onClick = { showAddTextDialog = true },
-                                    colors = ButtonDefaults.buttonColors(containerColor = OnChatMagenta)
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("+ Ajouter du texte")
                                 }
                                 if (textOverlays.isNotEmpty()) {
-                                    TextButton(onClick = { textOverlays.clear() }) {
-                                        Text("Effacer tout", color = Color.Red, fontSize = 12.sp)
+                                    Row(
+                                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        textOverlays.forEachIndexed { idx, overlay ->
+                                            AssistChip(
+                                                onClick = { textOverlays.removeAt(idx) },
+                                                label = { Text(overlay.text, fontSize = 11.sp) },
+                                                trailingIcon = { Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -547,44 +521,82 @@ fun VideoEditorScreen(
                             }
                         }
                         "Magie AI" -> {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceEvenly
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
                             ) {
-                                Button(
-                                    onClick = {
-                                        selectedFilterName = "Vibrant"
-                                        Toast.makeText(context, "Lumière & Couleurs optimisées par IA ✨", Toast.LENGTH_SHORT).show()
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Amélioration Éclairage IA", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    OutlinedTextField(
+                                        value = aiPrompt,
+                                        onValueChange = { aiPrompt = it },
+                                        placeholder = { Text("Instruction IA (ex: Couleurs vibrantes & légende pro)", fontSize = 11.sp, color = Color.Gray) },
+                                        modifier = Modifier.weight(1f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White
+                                        ),
+                                        singleLine = true
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            selectedFilterName = "Vibrant"
+                                            if (caption.isBlank()) {
+                                                caption = "Création exclusive sur OnChat Shorts ✨ #OnChat #CashPay #Viral"
+                                            }
+                                            if (subtitleText.isBlank()) {
+                                                subtitleText = "DÉCOUVREZ L'INNOVATION ONCHAT"
+                                                showSubtitles = true
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text("Appliquer IA", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
                         "Sous-titres" -> {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
                             ) {
-                                Text("Afficher sous-titres:", color = Color.White, fontSize = 13.sp)
-                                Switch(
-                                    checked = showSubtitles,
-                                    onCheckedChange = { showSubtitles = it },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = OnChatCyan, checkedTrackColor = OnChatViolet)
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Activer sous-titres :", color = Color.White, fontSize = 12.sp)
+                                    Switch(
+                                        checked = showSubtitles,
+                                        onCheckedChange = { showSubtitles = it },
+                                        colors = SwitchDefaults.colors(checkedThumbColor = OnChatCyan, checkedTrackColor = OnChatViolet)
+                                    )
+                                }
+                                if (showSubtitles) {
+                                    OutlinedTextField(
+                                        value = subtitleText,
+                                        onValueChange = { subtitleText = it },
+                                        placeholder = { Text("Texte des sous-titres...") },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp),
+                                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Bottom Tools Navigation Bar (Matching Screenshot 2 exactly)
+            // Bottom Tools Navigation Bar
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 color = Color(0xFF121212),
@@ -677,7 +689,7 @@ fun VideoEditorScreen(
             )
         }
 
-        // Publishing Progress Overlay with Real Continuous Counter
+        // Publishing Progress Overlay
         if (isPublishing) {
             Box(
                 modifier = Modifier
@@ -705,7 +717,7 @@ fun VideoEditorScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "${(uploadProgress * 100).toInt()}% • Signature OnChat & Encodage MP4",
+                        text = "${(uploadProgress * 100).toInt()}% • Traitement & Encodage MP4",
                         color = OnChatCyan,
                         fontSize = 14.sp
                     )

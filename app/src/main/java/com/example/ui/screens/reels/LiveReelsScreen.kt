@@ -64,7 +64,10 @@ fun LiveReelsScreen(
         viewModel.fetchVideosFeed()
     }
 
-    val pagerState = rememberPagerState(pageCount = { realVideos.size.coerceAtLeast(1) })
+    val validVideos = remember(realVideos) {
+        realVideos.filter { it.resolvedUrl.isNotBlank() }
+    }
+    val pagerState = rememberPagerState(pageCount = { validVideos.size.coerceAtLeast(1) })
     var selectedTab by remember { mutableIntStateOf(2) } // 0: Explorer, 1: Suivis, 2: Pour toi
     var showCaptureScreen by remember { mutableStateOf(false) }
     var editingMediaUri by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, type)
@@ -115,7 +118,7 @@ fun LiveReelsScreen(
                         )
                     }
                 }
-            } else if (realVideos.isEmpty()) {
+            } else if (validVideos.isEmpty()) {
                 // Real empty state - absolutely NO mock data fallback!
                 Box(
                     modifier = Modifier
@@ -166,8 +169,8 @@ fun LiveReelsScreen(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { page ->
-                    if (page in realVideos.indices) {
-                        val video = realVideos[page]
+                    if (page in validVideos.indices) {
+                        val video = validVideos[page]
                         ReelItemView(
                             video = video,
                             viewModel = viewModel,

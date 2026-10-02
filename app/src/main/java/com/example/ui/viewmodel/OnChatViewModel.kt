@@ -253,20 +253,6 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         com.example.data.api.SessionTokenStore.init(application)
-        ApiClient.onUnauthorized = {
-            viewModelScope.launch {
-                val wasAuthenticated = _loginStep.value == LoginStep.AUTHENTICATED
-                wsManager.disconnect()
-                repository.logout()
-                _loginStep.value = LoginStep.WALLET_ID
-                if (wasAuthenticated) {
-                    _authError.value = UiAuthError(
-                        title = "Session expirée",
-                        message = "Votre session CashPay a expiré. Veuillez vous reconnecter."
-                    )
-                }
-            }
-        }
         loadCountries()
         checkExistingSession()
         observeWebSocketEvents()

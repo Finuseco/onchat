@@ -16,7 +16,7 @@ data class VideoUploadResponse(
 data class VideoListResponse(
     @Json(name = "success") val success: Boolean = true,
     @Json(name = "videos") val videos: List<VideoItem> = emptyList(),
-    @Json(name = "total") val total: Int = 0
+    @Json(name = "total") val total: Int? = 0
 )
 
 @JsonClass(generateAdapter = true)
@@ -28,8 +28,8 @@ data class VideoDetailResponse(
 @JsonClass(generateAdapter = true)
 data class VideoLikeResponse(
     @Json(name = "success") val success: Boolean = true,
-    @Json(name = "liked") val liked: Boolean = false,
-    @Json(name = "likes") val likes: Int = 0,
+    @Json(name = "liked") val liked: Boolean? = false,
+    @Json(name = "likes") val likes: Int? = 0,
     @Json(name = "message") val message: String? = null
 )
 
@@ -37,7 +37,7 @@ data class VideoLikeResponse(
 data class VideoCommentsResponse(
     @Json(name = "success") val success: Boolean = true,
     @Json(name = "comments") val comments: List<VideoCommentItem> = emptyList(),
-    @Json(name = "total") val total: Int = 0
+    @Json(name = "total") val total: Int? = 0
 )
 
 @JsonClass(generateAdapter = true)
@@ -76,25 +76,29 @@ data class VideoPublisher(
 
 @JsonClass(generateAdapter = true)
 data class VideoInteractions(
-    @Json(name = "likes") val likes: Int = 0,
-    @Json(name = "likesCount") val likesCount: Int = 0,
-    @Json(name = "comments") val comments: Int = 0,
-    @Json(name = "shares") val shares: Int = 0,
-    @Json(name = "views") val views: Int = 0,
-    @Json(name = "liked") val liked: Boolean = false,
-    @Json(name = "isLiked") val isLiked: Boolean = false,
-    @Json(name = "likedByMe") val likedByMe: Boolean = false
+    @Json(name = "likes") val likes: Int? = 0,
+    @Json(name = "likesCount") val likesCount: Int? = 0,
+    @Json(name = "comments") val comments: Int? = 0,
+    @Json(name = "shares") val shares: Int? = 0,
+    @Json(name = "views") val views: Int? = 0,
+    @Json(name = "liked") val liked: Boolean? = false,
+    @Json(name = "isLiked") val isLiked: Boolean? = false,
+    @Json(name = "likedByMe") val likedByMe: Boolean? = false
 ) {
     val realLikesCount: Int
-        get() = if (likes > 0) likes else likesCount
+        get() {
+            val l = likes ?: 0
+            val lc = likesCount ?: 0
+            return if (l > 0) l else lc
+        }
 
     val realIsLiked: Boolean
-        get() = liked || isLiked || likedByMe
+        get() = (liked == true) || (isLiked == true) || (likedByMe == true)
 }
 
 @JsonClass(generateAdapter = true)
 data class VideoFollowInfo(
-    @Json(name = "isFollowing") val isFollowing: Boolean = false
+    @Json(name = "isFollowing") val isFollowing: Boolean? = false
 )
 
 @JsonClass(generateAdapter = true)
@@ -106,7 +110,7 @@ data class VideoItem(
     @Json(name = "content") val content: String? = null,
     @Json(name = "description") val description: String? = null,
     @Json(name = "caption") val caption: String? = null,
-    @Json(name = "durationSeconds") val durationSeconds: Int = 0,
+    @Json(name = "durationSeconds") val durationSeconds: Int? = 0,
     @Json(name = "publisher") val publisher: VideoPublisher? = null,
     @Json(name = "interactions") val interactions: VideoInteractions? = null,
     @Json(name = "follow") val follow: VideoFollowInfo? = null,

@@ -15,8 +15,18 @@ interface OnChatApiService {
     // 1. Auth Login (Wallet ID or Phone)
     @POST("api/v1/auth/login")
     suspend fun login(
-        @Body request: LoginRequest
+        @Body request: Map<String, String>
     ): Response<AuthResponse>
+
+    @POST("api/v1/auth/register")
+    suspend fun register(
+        @Body request: Map<String, String>
+    ): Response<AuthResponse>
+
+    @POST("api/v1/auth/change-pin")
+    suspend fun changePin(
+        @Body request: Map<String, String>
+    ): Response<SimpleResponse>
 
     // 2. Auth OTP Send (Explicit Channel)
     @POST("api/v1/auth/otp/send")
@@ -221,6 +231,25 @@ interface OnChatApiService {
         @Path("conversationId") conversationId: String,
         @Body request: TransferExecuteRequest
     ): Response<TransferExecuteResponse>
+
+    // Direct Chats routes
+    @GET("api/v1/chats")
+    suspend fun getChats(): Response<ConversationsListResponse>
+
+    @GET("api/v1/chats/{conversationId}/messages")
+    suspend fun getChatMessages(
+        @Path("conversationId") conversationId: String
+    ): Response<ConversationDetailResponse>
+
+    @POST("api/v1/chats/messages")
+    suspend fun sendChatMessage(
+        @Body request: SendMessageRequest
+    ): Response<SendMessageResponse>
+
+    @POST("api/v1/chats/messages/{messageId}/read")
+    suspend fun markMessageRead(
+        @Path("messageId") messageId: String
+    ): Response<SimpleResponse>
 
     // 14. Contacts Check (Batch)
     @POST("api/onchat/contacts/check")

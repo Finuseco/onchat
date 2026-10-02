@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -19,6 +20,7 @@ import com.example.ui.components.OnChatTab
 import com.example.ui.components.OnChatSplashScreen
 import com.example.ui.screens.auth.LoginScreen
 import com.example.ui.screens.profile.ProfileScreen
+import com.example.ui.screens.profile.UserProfileScreen
 import com.example.ui.screens.reels.LiveReelsScreen
 import com.example.ui.screens.reels.VideoPublishScreen
 import com.example.ui.screens.chats.ChatListScreen
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
         setContent {
             OnChatTheme {
@@ -55,6 +58,16 @@ class MainActivity : ComponentActivity() {
                 var currentTab by remember { mutableStateOf(OnChatTab.CHATS) }
                 var profilePhoneTarget by remember { mutableStateOf("") }
                 var searchQuery by remember { mutableStateOf("") }
+
+                val notificationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                    contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+                ) { }
+
+                LaunchedEffect(Unit) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
 
                 // Automatically switch to chat_detail screen when activeConversationId is populated
                 LaunchedEffect(activeConversationId) {
@@ -75,6 +88,8 @@ class MainActivity : ComponentActivity() {
                         "reels" -> currentScreen = "main"
                         "publish" -> currentScreen = "reels"
                         "profile" -> currentScreen = "main"
+                        "user_profile" -> currentScreen = "main"
+                        "public_profile" -> currentScreen = "main"
                         "settings" -> currentScreen = "main"
                         "transactions" -> currentScreen = "settings"
                         "jojo_ai" -> currentScreen = "main"
@@ -142,37 +157,6 @@ class MainActivity : ComponentActivity() {
                                             }
                                         )
 
-                                        // Material 3 Styled TabRow with OnChat Cyan indicators and CashPay Navy backgrounds
-                                        TabRow(
-                                            selectedTabIndex = currentTab.ordinal,
-                                            containerColor = CashPayNavy,
-                                            contentColor = Color.White,
-                                            indicator = { tabPositions ->
-                                                Box(
-                                                    modifier = Modifier
-                                                        .tabIndicatorOffset(tabPositions[currentTab.ordinal])
-                                                        .height(3.dp)
-                                                        .background(OnChatCyan)
-                                                )
-                                            },
-                                            divider = {}
-                                        ) {
-                                            OnChatTab.values().forEach { tab ->
-                                                Tab(
-                                                    selected = currentTab == tab,
-                                                    onClick = { currentTab = tab },
-                                                    text = {
-                                                        Text(
-                                                            text = tab.title,
-                                                            fontSize = 14.sp,
-                                                            fontWeight = if (currentTab == tab) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
-                                                            color = if (currentTab == tab) OnChatCyan else Color.White.copy(alpha = 0.7f)
-                                                        )
-                                                    }
-                                                )
-                                            }
-                                        }
-
                                         // Render active tab content fully channelling original OnChat modules
                                         Box(modifier = Modifier.weight(1f)) {
                                             when (currentTab) {
@@ -233,6 +217,43 @@ class MainActivity : ComponentActivity() {
                                                         }
                                                     )
                                                 }
+                                            }
+                                        }
+
+                                        // Footer Navigation Bar (Menu de navigation en bas avec icônes)
+                                        NavigationBar(
+                                            containerColor = CashPayNavy,
+                                            contentColor = Color.White,
+                                            tonalElevation = 8.dp,
+                                            modifier = Modifier.navigationBarsPadding()
+                                        ) {
+                                            OnChatTab.values().forEach { tab ->
+                                                val selected = currentTab == tab
+                                                NavigationBarItem(
+                                                    selected = selected,
+                                                    onClick = { currentTab = tab },
+                                                    icon = {
+                                                        Icon(
+                                                            imageVector = tab.icon,
+                                                            contentDescription = tab.title,
+                                                            modifier = Modifier.size(24.dp)
+                                                        )
+                                                    },
+                                                    label = {
+                                                        Text(
+                                                            text = tab.title,
+                                                            fontSize = 11.sp,
+                                                            fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium
+                                                        )
+                                                    },
+                                                    colors = NavigationBarItemDefaults.colors(
+                                                        selectedIconColor = OnChatCyan,
+                                                        selectedTextColor = OnChatCyan,
+                                                        indicatorColor = OnChatCyan.copy(alpha = 0.15f),
+                                                        unselectedIconColor = Color.White.copy(alpha = 0.55f),
+                                                        unselectedTextColor = Color.White.copy(alpha = 0.55f)
+                                                    )
+                                                )
                                             }
                                         }
                                     }

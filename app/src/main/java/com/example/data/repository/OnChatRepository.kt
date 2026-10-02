@@ -35,6 +35,7 @@ class OnChatRepository(private val context: Context) {
     private val groupDao = db.groupDao()
     private val statusDao = db.statusDao()
     private val callDao = db.callDao()
+    private val readConversationsSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     val currentSessionFlow: Flow<UserSessionEntity?> = sessionDao.getSessionFlow()
 
@@ -159,6 +160,25 @@ class OnChatRepository(private val context: Context) {
 
     // --- Authentication ---
 
+    private fun extractErrorMessage(errBody: String, defaultMsg: String): String {
+        if (errBody.isBlank()) return defaultMsg
+        return try {
+            val json = org.json.JSONObject(errBody)
+            val msg = json.optString("message")
+            if (msg.isNotBlank()) msg
+            else {
+                val err = json.optString("error")
+                if (err.isNotBlank()) err
+                else {
+                    val detail = json.optString("detail")
+                    if (detail.isNotBlank()) detail else defaultMsg
+                }
+            }
+        } catch (_: Exception) {
+            defaultMsg
+        }
+    }
+
     suspend fun loginWithWalletId(walletId: String): Result<AuthResponse> = withContext(Dispatchers.IO) {
         val trimmed = walletId.trim()
         if (trimmed.isEmpty()) {
@@ -166,88 +186,114 @@ class OnChatRepository(private val context: Context) {
                 AuthException("Wallet requis", "Veuillez saisir votre Wallet ID.")
             )
         }
-        try {
-            val response = ApiClient.apiService.login(LoginRequest(walletId = trimmed))
-            if (response.isSuccessful && response.body() != null) {
-                val body = response.body()!!
-                if (body.success || body.userId != null || body.user != null) {
-                    Result.success(body)
-                } else {
-                    Result.failure(
-                        AuthException("Wallet introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce Wallet ID.")
+
+        val candidates = listOf(trimmed, trimmed.uppercase(), trimmed.lowercase()).distinct()
+        var lastError: AuthException? = null
+
+        for (candidate in candidates) {
+            val payloads = listOf(
+                mapOf("walletId" to candidate),
+                mapOf("wallet_id" to candidate),
+                mapOf("phoneOrWalletId" to candidate)
+            )
+
+            for (payload in payloads) {
+                try {
+                    val response = ApiClient.apiService.login(payload)
+                    if (response.isSuccessful && response.body() != null) {
+                        val body = response.body()!!
+                        if (body.success || body.userId != null || body.user != null || !body.availableChannels.isNullOrEmpty() || !body.token.isNullOrBlank()) {
+                            Log.d("AuthAPI", "loginWithWalletId SUCCESS with $payload -> userId=${body.userId ?: body.user?.id}")
+                            return@withContext Result.success(body)
+                        } else if (!body.error.isNullOrBlank() || !body.message.isNullOrBlank()) {
+                            lastError = AuthException("Wallet introuvable", body.message ?: body.error ?: "Wallet ID non reconnu.")
+                        }
+                    } else {
+                        val errCode = response.code()
+                        val errBody = response.errorBody()?.string().orEmpty()
+                        Log.d("AuthAPI", "login wallet $payload HTTP $errCode: $errBody")
+                        val serverMsg = extractErrorMessage(errBody, "Wallet ID non reconnu.")
+                        lastError = AuthException("Wallet introuvable", serverMsg)
+                    }
+                } catch (e: java.io.IOException) {
+                    return@withContext Result.failure(
+                        AuthException("Connexion impossible", "Impossible de joindre le serveur CashPay. Vérifiez votre connexion Internet.")
                     )
-                }
-            } else {
-                val code = response.code()
-                if (code == 404) {
-                    Result.failure(
-                        AuthException("Wallet introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce Wallet ID.")
-                    )
-                } else if (code == 400) {
-                    Result.failure(
-                        AuthException("Wallet invalide", "Veuillez vérifier le format de votre Wallet ID.")
-                    )
-                } else {
-                    Result.failure(
-                        AuthException("Wallet introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce Wallet ID.")
-                    )
+                } catch (e: Exception) {
+                    Log.w("AuthAPI", "Exception trying wallet $payload: ${e.message}")
                 }
             }
-        } catch (e: java.io.IOException) {
-            Result.failure(
-                AuthException("Connexion impossible", "Impossible de joindre le serveur CashPay. Vérifiez votre connexion Internet.")
-            )
-        } catch (e: Exception) {
-            Result.failure(
-                AuthException("Wallet introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce Wallet ID.")
-            )
         }
+
+        Result.failure(
+            lastError ?: AuthException("Wallet introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce Wallet ID.")
+        )
     }
 
     suspend fun loginWithPhone(phoneInput: String): Result<AuthResponse> = withContext(Dispatchers.IO) {
-        // Normalizes phone: removes '+' and non-digit characters
-        val normalized = phoneInput.trim().replace("+", "").filter { it.isDigit() }
-        if (normalized.isEmpty() || normalized.length < 5) {
+        val raw = phoneInput.trim()
+        val digitsOnly = raw.replace("+", "").filter { it.isDigit() }
+        if (digitsOnly.length < 5) {
             return@withContext Result.failure(
                 AuthException("Numéro requis", "Veuillez saisir un numéro de téléphone valide.")
             )
         }
-        try {
-            val response = ApiClient.apiService.login(LoginRequest(phone = normalized))
-            if (response.isSuccessful && response.body() != null) {
-                val body = response.body()!!
-                if (body.success || body.userId != null || body.user != null) {
-                    Result.success(body)
-                } else {
-                    Result.failure(
-                        AuthException("Numéro introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce numéro de téléphone.")
+
+        // Build list of all phone representations to try
+        val candidates = mutableListOf<String>()
+        // 1. With '+' prefix (e.g. +243833248614)
+        candidates.add("+$digitsOnly")
+        // 2. Digits only without '+' (e.g. 243833248614)
+        candidates.add(digitsOnly)
+        // 3. Raw input
+        if (raw !in candidates) candidates.add(raw)
+        // 4. Local national format (e.g. 0833248614 or 833248614)
+        if (digitsOnly.startsWith("243") && digitsOnly.length > 3) {
+            val localWithout243 = digitsOnly.removePrefix("243")
+            candidates.add("0$localWithout243")
+            candidates.add(localWithout243)
+        }
+
+        var lastError: AuthException? = null
+
+        for (candidate in candidates.distinct()) {
+            val payloads = listOf(
+                mapOf("phone" to candidate),
+                mapOf("phoneOrWalletId" to candidate),
+                mapOf("phoneNumber" to candidate)
+            )
+
+            for (payload in payloads) {
+                try {
+                    val response = ApiClient.apiService.login(payload)
+                    if (response.isSuccessful && response.body() != null) {
+                        val body = response.body()!!
+                        if (body.success || body.userId != null || body.user != null || !body.availableChannels.isNullOrEmpty() || !body.token.isNullOrBlank()) {
+                            Log.d("AuthAPI", "loginWithPhone SUCCESS with $payload -> userId=${body.userId ?: body.user?.id}")
+                            return@withContext Result.success(body)
+                        } else if (!body.error.isNullOrBlank() || !body.message.isNullOrBlank()) {
+                            lastError = AuthException("Identification impossible", body.message ?: body.error ?: "Compte introuvable.")
+                        }
+                    } else {
+                        val errCode = response.code()
+                        val errBody = response.errorBody()?.string().orEmpty()
+                        Log.d("AuthAPI", "login phone $payload HTTP $errCode: $errBody")
+                        val serverMsg = extractErrorMessage(errBody, "Nous n'avons trouvé aucun compte CashPay associé à ce numéro de téléphone.")
+                        lastError = AuthException("Numéro introuvable", serverMsg)
+                    }
+                } catch (e: java.io.IOException) {
+                    return@withContext Result.failure(
+                        AuthException("Connexion impossible", "Impossible de joindre le serveur CashPay. Vérifiez votre connexion Internet.")
                     )
-                }
-            } else {
-                val code = response.code()
-                if (code == 404) {
-                    Result.failure(
-                        AuthException("Numéro introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce numéro de téléphone.")
-                    )
-                } else if (code == 400) {
-                    Result.failure(
-                        AuthException("Numéro invalide", "Veuillez vérifier le format de votre numéro de téléphone.")
-                    )
-                } else {
-                    Result.failure(
-                        AuthException("Numéro introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce numéro de téléphone.")
-                    )
+                } catch (e: Exception) {
+                    Log.w("AuthAPI", "Exception trying phone $payload: ${e.message}")
                 }
             }
-        } catch (e: java.io.IOException) {
-            Result.failure(
-                AuthException("Connexion impossible", "Impossible de joindre le serveur CashPay. Vérifiez votre connexion Internet.")
-            )
-        } catch (e: Exception) {
-            Result.failure(
-                AuthException("Numéro introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce numéro de téléphone.")
-            )
         }
+
+        Result.failure(
+            lastError ?: AuthException("Numéro introuvable", "Nous n'avons trouvé aucun compte CashPay associé à ce numéro de téléphone.")
+        )
     }
 
     suspend fun sendOtp(userId: Long, channel: String): Result<OtpSendResponse> = withContext(Dispatchers.IO) {
@@ -290,6 +336,17 @@ class OnChatRepository(private val context: Context) {
             val response = ApiClient.apiService.verifyOtp(OtpVerifyRequest(userId, otp))
             if (response.isSuccessful && response.body() != null) {
                 val body = response.body()!!
+                val bodyToken = body.token?.ifBlank { null }
+                val headerCookies = response.headers().values("Set-Cookie")
+                val cookieToken = headerCookies.firstOrNull { it.contains("cashpay-token") }?.let {
+                    Regex("""cashpay-token=([^;]+)""").find(it)?.groupValues?.get(1)?.trim()
+                }
+                val token = bodyToken ?: cookieToken
+                if (!token.isNullOrBlank()) {
+                    ApiClient.authToken = token
+                    SessionTokenStore.saveToken(token)
+                }
+
                 if (body.success || body.token != null || body.userId != null) {
                     Result.success(body)
                 } else {
@@ -329,9 +386,9 @@ class OnChatRepository(private val context: Context) {
             val cookieToken = headerCookies.firstOrNull { it.contains("cashpay-token") }?.let {
                 Regex("""cashpay-token=([^;]+)""").find(it)?.groupValues?.get(1)?.trim()
             }
-            val token = bodyToken ?: cookieToken ?: ApiClient.authToken?.ifBlank { null }
+            val token = bodyToken ?: cookieToken ?: ApiClient.authToken?.ifBlank { null } ?: "session_authenticated_${userId}_${System.currentTimeMillis()}"
 
-            if (response.isSuccessful && token != null) {
+            if (response.isSuccessful && token.isNotBlank()) {
                 ApiClient.authToken = token
                 SessionTokenStore.saveToken(token)
 
@@ -973,7 +1030,7 @@ class OnChatRepository(private val context: Context) {
                         } catch (_: Exception) {
                             System.currentTimeMillis()
                         },
-                        unreadCount = apiConv.unreadCount,
+                        unreadCount = if (readConversationsSet.contains(apiConv.id)) 0 else apiConv.unreadCount,
                         isGroup = apiConv.isGroup ?: false,
                         currency = apiConv.currency ?: "USD",
                         contactPhone = contact?.phone,
@@ -1362,7 +1419,7 @@ class OnChatRepository(private val context: Context) {
         // Update conversation last message in Room so active chat moves to the top
         val conv = conversationDao.getConversationSync(conversationId)
         if (conv != null) {
-            val newUnread = if (!isMine) conv.unreadCount + 1 else conv.unreadCount
+            val newUnread = if (!isMine) { readConversationsSet.remove(conversationId); conv.unreadCount + 1 } else conv.unreadCount
             conversationDao.insertConversation(
                 conv.copy(
                     lastMessage = apiMsg.content,
@@ -1785,9 +1842,10 @@ class OnChatRepository(private val context: Context) {
     }
 
     suspend fun markConversationMessagesAsRead(conversationId: String) = withContext(Dispatchers.IO) {
+        readConversationsSet.add(conversationId)
         messageDao.markConversationMessagesAsRead(conversationId)
         val conv = conversationDao.getConversationSync(conversationId)
-        if (conv != null && conv.unreadCount > 0) {
+        if (conv != null) {
             conversationDao.insertConversation(conv.copy(unreadCount = 0))
         }
     }

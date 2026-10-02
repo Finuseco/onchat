@@ -40,8 +40,13 @@ data class CountriesResponse(
 
 @JsonClass(generateAdapter = true)
 data class LoginRequest(
+    @Json(name = "phoneOrWalletId") val phoneOrWalletId: String? = null,
+    @Json(name = "phone") val phone: String? = null,
+    @Json(name = "phoneNumber") val phoneNumber: String? = null,
+    @Json(name = "phone_number") val phone_number: String? = null,
     @Json(name = "walletId") val walletId: String? = null,
-    @Json(name = "phone") val phone: String? = null
+    @Json(name = "wallet_id") val wallet_id: String? = null,
+    @Json(name = "wallet") val wallet: String? = null
 )
 
 @JsonClass(generateAdapter = true)
