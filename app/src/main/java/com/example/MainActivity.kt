@@ -69,6 +69,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // Keep realtime connection alive in background once the user is logged in
+                LaunchedEffect(loginStep) {
+                    if (loginStep == LoginStep.AUTHENTICATED) {
+                        try {
+                            com.example.service.OnChatBackgroundService.start(applicationContext)
+                        } catch (e: Exception) {
+                            android.util.Log.w("MainActivity", "Could not start background service: ${e.message}")
+                        }
+                    }
+                }
+
                 // Automatically switch to chat_detail screen when activeConversationId is populated
                 LaunchedEffect(activeConversationId) {
                     if (activeConversationId != null) {
