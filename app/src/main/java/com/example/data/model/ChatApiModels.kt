@@ -46,6 +46,7 @@ data class ApiMessage(
     @Json(name = "conversationId") val conversationId: String? = null,
     @Json(name = "senderId") val senderId: Long? = null,
     @Json(name = "senderName") val senderName: String? = null,
+    @Json(name = "senderAvatar") val senderAvatar: String? = null,
     @Json(name = "content") val content: String = "",
     @Json(name = "type") val type: String = "text", // text, audio, image, doc, product, in_chat_transfer, system
     @Json(name = "metadata") val metadata: Map<String, String>? = null,

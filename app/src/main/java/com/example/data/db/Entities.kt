@@ -39,6 +39,7 @@ data class UserSessionEntity(
     val astroAscendant: String? = null,
     val bitcoinAddress: String? = null,
     val biometricEnabled: Boolean = false,
+    val customChatBackgroundUri: String? = null,
     val lastLoginTime: Long = System.currentTimeMillis()
 )
 
@@ -83,6 +84,7 @@ data class MessageEntity(
     val senderId: String,
     val senderWalletId: String? = null,
     val senderName: String,
+    val senderAvatar: String? = null,
     val content: String,
     val timestamp: Long,
     val isMine: Boolean,
@@ -183,6 +185,7 @@ fun MessageEntity.toDomain(): Message = Message(
     senderId = senderId,
     senderWalletId = senderWalletId,
     senderName = senderName,
+    senderAvatar = senderAvatar,
     content = content,
     timestamp = timestamp,
     isMine = isMine,

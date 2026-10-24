@@ -709,6 +709,10 @@ class OnChatRepository(private val context: Context) {
         sessionDao.setBiometricEnabled(enabled)
     }
 
+    suspend fun setChatBackgroundUri(uri: String?) = withContext(Dispatchers.IO) {
+        sessionDao.setChatBackgroundUri(uri)
+    }
+
     // --- Contacts Check & Phone Profile Lookup ---
 
     /**
@@ -1138,6 +1142,7 @@ class OnChatRepository(private val context: Context) {
                         senderId = (apiMsg.senderId?.toString()) ?: currentUserId,
                         senderWalletId = session?.walletId ?: ApiClient.activeWalletId,
                         senderName = apiMsg.senderName ?: if (isMine) "Moi" else "Contact",
+                        senderAvatar = apiMsg.senderAvatar ?: if (isMine) session?.avatarUrl else null,
                         content = apiMsg.content,
                         timestamp = timestamp,
                         isMine = isMine,
@@ -1402,6 +1407,7 @@ class OnChatRepository(private val context: Context) {
             senderId = (apiMsg.senderId?.toString()) ?: (if (isMine) currentUserId else "contact"),
             senderWalletId = session?.walletId ?: ApiClient.activeWalletId,
             senderName = apiMsg.senderName ?: if (isMine) "Moi" else "Contact",
+            senderAvatar = apiMsg.senderAvatar ?: if (isMine) session?.avatarUrl else null,
             content = apiMsg.content,
             timestamp = timestamp,
             isMine = isMine,
@@ -1463,6 +1469,7 @@ class OnChatRepository(private val context: Context) {
             senderId = senderId,
             senderWalletId = session?.walletId ?: ApiClient.activeWalletId,
             senderName = senderName,
+            senderAvatar = session?.avatarUrl,
             content = content,
             timestamp = now,
             isMine = isMine,
@@ -1953,7 +1960,7 @@ class OnChatRepository(private val context: Context) {
         durationSeconds: Int? = null,
         thumbnailUrl: String? = null
     ): Result<VideoItem> = withContext(Dispatchers.IO) {
-        val url = "https://app.cashpay-all.com/api/v1/media/videos"
+        val url = "https://app.cashpay-all.com/api/v1/media/upload"
         Log.d(
             "VideoAPI",
             "POST $url | Field: 'video' | File: $fileName | Size: ${fileBytes.size} bytes | MIME: $mimeType | Token: ${!ApiClient.authToken.isNullOrBlank()}"
@@ -2003,13 +2010,15 @@ class OnChatRepository(private val context: Context) {
         fileBytes: ByteArray,
         fileName: String,
         mimeType: String,
-        durationSeconds: Int = 0
+        durationSeconds: Int = 0,
+        publisherId: Long? = null
     ): String? = withContext(Dispatchers.IO) {
         val result = uploadVideo(
             fileBytes = fileBytes,
             fileName = fileName,
             mimeType = mimeType,
-            durationSeconds = durationSeconds
+            durationSeconds = durationSeconds,
+            publisherId = publisherId
         )
         result.getOrNull()?.resolvedUrl
     }

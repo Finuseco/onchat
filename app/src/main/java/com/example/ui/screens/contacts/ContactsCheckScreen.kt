@@ -443,7 +443,13 @@ fun ContactsCheckScreen(
                 ) {
                     items(
                         items = displayList,
-                        key = { it.phone.ifBlank { it.walletId ?: it.name ?: it.hashCode().toString() } }
+                        key = { contact ->
+                            val phoneStr = contact.phone.orEmpty()
+                            val nameStr = contact.name.orEmpty()
+                            val walletStr = contact.walletId.orEmpty()
+                            val userStr = contact.userId?.toString().orEmpty()
+                            "${phoneStr}_${nameStr}_${walletStr}_${userStr}_${contact.hashCode()}"
+                        }
                     ) { contact ->
                         ContactItemCard(
                             contact = contact,

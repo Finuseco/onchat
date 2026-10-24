@@ -2,7 +2,10 @@ package com.example.ui.screens.chats
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -46,6 +49,8 @@ import com.example.ui.components.AvatarBadge
 import com.example.ui.components.SkeletonMessageBubble
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.OnChatViewModel
+import com.example.util.AudioRecorder
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -72,6 +77,19 @@ fun ChatDetailScreen(
 
     var inputText by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
+
+    // Background Image state
+    val chatBackgroundUri by viewModel.repository.currentSessionFlow.map { it?.customChatBackgroundUri }.collectAsState(initial = null)
+    val backgroundPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { viewModel.setChatBackgroundUri(it.toString()) }
+    }
+
+    // Audio recording state
+    val audioRecorder = remember { AudioRecorder(context) }
+    var isRecording by remember { mutableStateOf(false) }
+    var recordingFile by remember { mutableStateOf<java.io.File?>(null) }
 
     // Attachments bottom sheet & Emoji / Sticker picker states
     var showAttachmentSheet by remember { mutableStateOf(false) }
@@ -191,6 +209,15 @@ fun ChatDetailScreen(
                         )
                     }
                     IconButton(onClick = {
+                        backgroundPickerLauncher.launch("image/*")
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Image,
+                            contentDescription = "Fond d'écran",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(onClick = {
                         onOpenProfile?.invoke(conversationId)
                     }) {
                         Icon(
@@ -287,22 +314,46 @@ fun ChatDetailScreen(
                         modifier = Modifier
                             .size(44.dp)
                             .clip(CircleShape)
-                            .background(brush = if (inputText.isNotBlank()) OnChatPrimaryGradient else Brush.horizontalGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0))))
-                            .clickable {
-                                if (inputText.isNotBlank()) {
-                                    viewModel.sendMessage(inputText)
-                                    inputText = ""
-                                    showEmojiStickerPicker = false
-                                } else {
-                                    // Send authentic Telegram-style voice note (0:10)
-                                    viewModel.sendMessage("🎤 Note vocale (0:10)", type = "audio")
-                                    Toast.makeText(context, "Note vocale enregistrée et envoyée", Toast.LENGTH_SHORT).show()
-                                }
+                            .background(brush = if (inputText.isNotBlank() || isRecording) OnChatPrimaryGradient else Brush.horizontalGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0))))
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onPress = {
+                                        if (inputText.isBlank()) {
+                                            try {
+                                                val file = java.io.File(context.cacheDir, "voice_note_${System.currentTimeMillis()}.m4a")
+                                                recordingFile = file
+                                                audioRecorder.start(file)
+                                                isRecording = true
+                                            } catch (e: Exception) {
+                                                Toast.makeText(context, "Erreur micro: ${e.message}", Toast.LENGTH_SHORT).show()
+                                            }
+                                            try {
+                                                awaitRelease()
+                                            } finally {
+                                                if (isRecording) {
+                                                    audioRecorder.stop()
+                                                    isRecording = false
+                                                    recordingFile?.let { viewModel.sendAudioMessage(it) }
+                                                    Toast.makeText(context, "Note vocale envoyée", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onTap = {
+                                        if (inputText.isNotBlank()) {
+                                            viewModel.sendMessage(inputText)
+                                            inputText = ""
+                                            showEmojiStickerPicker = false
+                                        } else {
+                                            Toast.makeText(context, "Maintenez pour enregistrer", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                )
                             },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (inputText.isNotBlank()) Icons.Default.Send else Icons.Default.Mic,
+                            imageVector = if (inputText.isNotBlank()) Icons.Default.Send else if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
                             contentDescription = if (inputText.isNotBlank()) "Envoyer" else "Enregistrer audio",
                             tint = Color.White,
                             modifier = Modifier.size(22.dp)
@@ -344,19 +395,30 @@ fun ChatDetailScreen(
                 .background(CashPayNavyDark)
                 .padding(innerPadding)
         ) {
-            // Telegram Wallpaper Subtle Background Pattern (Blueprints & Doodles overlay)
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val w = size.width
-                val h = size.height
+            // Background Image (Gallery or Default)
+            if (chatBackgroundUri != null) {
+                androidx.compose.foundation.Image(
+                    painter = coil.compose.rememberAsyncImagePainter(chatBackgroundUri),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    alpha = 0.4f
+                )
+            } else {
+                // Telegram Wallpaper Subtle Background Pattern (Blueprints & Doodles overlay)
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val w = size.width
+                    val h = size.height
 
-                val patternColor = Color(0xFF1A233D).copy(alpha = 0.35f)
+                    val patternColor = Color(0xFF1A233D).copy(alpha = 0.35f)
 
-                // Subtle circular doodle accents
-                for (x in 0..4) {
-                    for (y in 0..8) {
-                        val cx = (w / 4) * x
-                        val cy = (h / 8) * y + ((x % 2) * 40f)
-                        drawCircle(patternColor, radius = 6f, center = Offset(cx, cy))
+                    // Subtle circular doodle accents
+                    for (x in 0..4) {
+                        for (y in 0..8) {
+                            val cx = (w / 4) * x
+                            val cy = (h / 8) * y + ((x % 2) * 40f)
+                            drawCircle(patternColor, radius = 6f, center = Offset(cx, cy))
+                        }
                     }
                 }
             }
@@ -440,12 +502,14 @@ fun ChatDetailScreen(
             onSendFile = { fileName, fileType, sizeStr ->
                 viewModel.sendMessage("📄 $fileName ($sizeStr)", type = if (fileType == "image") "image" else "doc")
             },
-            onSendContact = { name, phone, walletId ->
-                viewModel.sendMessage("$name ($phone) • Wallet: $walletId", type = "contact")
+            onSendContact = { name, phone, walletId, avatar ->
+                val avatarPart = if (!avatar.isNullOrBlank()) " • Avatar: $avatar" else ""
+                viewModel.sendMessage("$name ($phone) • Wallet: $walletId$avatarPart", type = "contact")
             },
             onSendPoll = { question, options ->
                 viewModel.sendMessage("$question | ${options.joinToString(";")}", type = "poll")
-            }
+            },
+            searchProfile = { phone -> viewModel.repository.searchProfileByPhone(phone).getOrNull() }
         )
     }
 
@@ -1278,6 +1342,15 @@ fun ChatDetailScreen(
                                         if (body != null && body.isTransferSuccess) {
                                             transferSuccessResult = body
                                             transferStep = 4
+                                            viewModel.sendMessage(
+                                                "💸 Transfert CashPay Réussi ($amount $transferCurrency)",
+                                                type = "in_chat_transfer",
+                                                metadata = mapOf(
+                                                    "amount" to amount.toString(),
+                                                    "currency" to transferCurrency,
+                                                    "reference" to (body.resolvedReference ?: "")
+                                                )
+                                            )
                                         } else {
                                             transferErrorMessage = body?.error ?: body?.message ?: "Code PIN incorrect."
                                         }
@@ -1451,217 +1524,251 @@ fun MessageBubbleItem(
         sdf.format(Date(message.timestamp))
     }
 
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .pointerInput(Unit) {
                 detectTapGestures(
                     onLongPress = { onLongPress() }
                 )
-            },
-        contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart
+            }
+            .padding(vertical = 4.dp),
+        horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom
     ) {
-        when {
-            message.type == "in_chat_transfer" || message.transferAmount != null -> {
-                // Dedicated In-Chat Transfer Card (CashPay All)
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = CashPayNavySurface),
-                    border = CardDefaults.outlinedCardBorder().copy(
-                        brush = Brush.horizontalGradient(listOf(OnChatCyan, OnChatViolet))
-                    ),
-                    modifier = Modifier
-                        .widthIn(min = 260.dp, max = 310.dp)
-                        .padding(vertical = 4.dp)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(OnChatCyan.copy(alpha = 0.2f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = OnChatCyan,
-                                        modifier = Modifier.size(20.dp)
+        if (!message.isMine) {
+            // Correspondent Avatar on the Left
+            AvatarBadge(
+                name = message.senderName,
+                avatarUrl = message.senderAvatar,
+                size = 32.dp,
+                isGroup = false
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+
+        Box(
+            modifier = Modifier.widthIn(max = 280.dp),
+            contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart
+        ) {
+            when {
+                message.type == "in_chat_transfer" || message.transferAmount != null -> {
+                    // Dedicated In-Chat Transfer Card (CashPay All)
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = CashPayNavySurface),
+                        border = CardDefaults.outlinedCardBorder().copy(
+                            brush = Brush.horizontalGradient(listOf(OnChatCyan, OnChatViolet))
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(OnChatCyan.copy(alpha = 0.2f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = OnChatCyan,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "Transfert CashPay",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Transfert CashPay",
-                                    color = Color.White,
+                                    text = "RÉUSSI",
+                                    color = Color(0xFF25D366),
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
+                                    fontSize = 11.sp
                                 )
                             }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            val amountDisplay = message.transferAmount ?: message.metadata?.get("amount")?.toDoubleOrNull() ?: 0.0
+                            val currencyDisplay = message.transferCurrency ?: message.metadata?.get("currency") ?: "USD"
                             Text(
-                                text = "RÉUSSI",
-                                color = Color(0xFF25D366),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp
+                                text = String.format(Locale.US, "%,.2f %s", amountDisplay, currencyDisplay),
+                                color = Color.White,
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.ExtraBold
                             )
-                        }
 
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        val amountDisplay = message.transferAmount ?: 25.0
-                        val currencyDisplay = message.transferCurrency ?: "USD"
-                        Text(
-                            text = "$amountDisplay $currencyDisplay",
-                            color = Color.White,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-
-                        val ref = message.transferReference ?: "TR${message.id}"
-                        Text(
-                            text = "Réf : $ref",
-                            color = CashPayGrey,
-                            fontSize = 11.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                            val ref = message.transferReference ?: message.metadata?.get("reference") ?: "TR${message.id}"
                             Text(
-                                text = "Transaction certifiée",
-                                color = OnChatCyan,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                text = timeFormatted,
+                                text = "Réf : $ref",
                                 color = CashPayGrey,
                                 fontSize = 11.sp
                             )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Transaction certifiée",
+                                    color = OnChatCyan,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = timeFormatted,
+                                    color = CashPayGrey,
+                                    fontSize = 11.sp
+                                )
+                            }
                         }
                     }
                 }
-            }
 
-            // Telegram-style Voice Message Waveform Bubble (Screenshot 1)
-            message.type == "audio" -> {
-                VoiceMessageBubble(message = message, timeFormatted = timeFormatted)
-            }
+                // Telegram-style Voice Message Waveform Bubble (Screenshot 1)
+                message.type == "audio" -> {
+                    VoiceMessageBubble(message = message, timeFormatted = timeFormatted)
+                }
 
-            // Interactive Location Bubble (Screenshot 2)
-            message.type == "location" -> {
-                LocationCardBubble(message = message, timeFormatted = timeFormatted)
-            }
+                // Interactive Location Bubble (Screenshot 2)
+                message.type == "location" -> {
+                    LocationCardBubble(message = message, timeFormatted = timeFormatted)
+                }
 
-            // Expressive Sticker Bubble
-            message.type == "sticker" -> {
-                StickerBubble(message = message, timeFormatted = timeFormatted)
-            }
+                // Expressive Sticker Bubble
+                message.type == "sticker" -> {
+                    StickerBubble(message = message, timeFormatted = timeFormatted)
+                }
 
-            // Contact Card Bubble
-            message.type == "contact" -> {
-                ContactCardBubble(message = message, timeFormatted = timeFormatted)
-            }
+                // Contact Card Bubble
+                message.type == "contact" -> {
+                    ContactCardBubble(message = message, timeFormatted = timeFormatted)
+                }
 
-            // Poll Card Bubble
-            message.type == "poll" -> {
-                PollCardBubble(message = message, timeFormatted = timeFormatted)
-            }
+                // Poll Card Bubble
+                message.type == "poll" -> {
+                    PollCardBubble(message = message, timeFormatted = timeFormatted)
+                }
 
-            // Standard Text / Document Bubble
-            else -> {
-                Box(
-                    modifier = Modifier
-                        .widthIn(max = 290.dp)
-                        .clip(
-                            RoundedCornerShape(
-                                topStart = 16.dp,
-                                topEnd = 16.dp,
-                                bottomStart = if (message.isMine) 16.dp else 2.dp,
-                                bottomEnd = if (message.isMine) 2.dp else 16.dp
-                            )
-                        )
-                        .then(
-                            if (message.isMine) Modifier.background(brush = OnChatBubbleGradient)
-                            else Modifier.background(CashPayReceivedBubble)
-                        )
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Column {
-                        if (!message.isMine) {
-                            Text(
-                                text = message.senderName,
-                                color = OnChatCyan,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                        }
-
-                        if (message.type == "doc") {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.InsertDriveFile,
-                                    contentDescription = null,
-                                    tint = OnChatCyan,
-                                    modifier = Modifier.size(24.dp)
+                // Standard Text / Document Bubble
+                else -> {
+                    Box(
+                        modifier = Modifier
+                            .clip(
+                                RoundedCornerShape(
+                                    topStart = 16.dp,
+                                    topEnd = 16.dp,
+                                    bottomStart = if (message.isMine) 16.dp else 2.dp,
+                                    bottomEnd = if (message.isMine) 2.dp else 16.dp
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
+                            )
+                            .then(
+                                if (message.isMine) Modifier.background(brush = OnChatBubbleGradient)
+                                else Modifier.background(CashPayReceivedBubbleLight)
+                            )
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Column {
+                            if (message.type == "image" || !message.fileUrl.isNullOrBlank()) {
+                                androidx.compose.foundation.Image(
+                                    painter = coil.compose.rememberAsyncImagePainter(message.fileUrl ?: message.content),
+                                    contentDescription = "Image partagée",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 240.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                )
+                                if (message.content.startsWith("http").not() && message.content.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = message.content,
+                                        color = if (message.isMine) Color.White else Color.Black,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            } else if (message.type == "doc") {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.InsertDriveFile,
+                                        contentDescription = null,
+                                        tint = if (message.isMine) Color.White else OnChatBlue,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = message.content,
+                                        color = if (message.isMine) Color.White else Color.Black,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            } else {
                                 Text(
                                     text = message.content,
-                                    color = Color.White,
-                                    fontSize = 14.sp
+                                    color = if (message.isMine) Color.White else Color.Black,
+                                    fontSize = 15.sp,
+                                    lineHeight = 20.sp
                                 )
                             }
-                        } else {
-                            Text(
-                                text = message.content,
-                                color = Color.White,
-                                fontSize = 15.sp,
-                                lineHeight = 20.sp
-                            )
-                        }
 
-                        Spacer(modifier = Modifier.height(3.dp))
+                            Spacer(modifier = Modifier.height(3.dp))
 
-                        Row(
-                            modifier = Modifier.align(Alignment.End),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (message.isEdited) {
+                            Row(
+                                modifier = Modifier.align(Alignment.End),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (message.isEdited) {
+                                    Text(
+                                        text = "modifié • ",
+                                        color = if (message.isMine) Color.White.copy(alpha = 0.7f) else Color.Gray,
+                                        fontSize = 10.sp
+                                    )
+                                }
                                 Text(
-                                    text = "modifié • ",
-                                    color = CashPayGrey,
-                                    fontSize = 10.sp
+                                    text = timeFormatted,
+                                    color = if (message.isMine) Color.White.copy(alpha = 0.7f) else Color.Gray,
+                                    fontSize = 11.sp
                                 )
-                            }
-                            Text(
-                                text = timeFormatted,
-                                color = CashPayGrey,
-                                fontSize = 11.sp
-                            )
-                            if (message.isMine) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Icon(
-                                    imageVector = Icons.Default.DoneAll,
-                                    contentDescription = "Délivré",
-                                    tint = OnChatCyan,
-                                    modifier = Modifier.size(15.dp)
-                                )
+                                if (message.isMine) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.Default.DoneAll,
+                                        contentDescription = "Délivré",
+                                        tint = OnChatCyan,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        if (message.isMine) {
+            // User Avatar on the Right
+            Spacer(modifier = Modifier.width(8.dp))
+            AvatarBadge(
+                name = message.senderName,
+                avatarUrl = message.senderAvatar,
+                size = 32.dp,
+                isGroup = false
+            )
         }
     }
 }

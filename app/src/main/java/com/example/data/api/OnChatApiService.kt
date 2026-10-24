@@ -322,9 +322,9 @@ interface OnChatApiService {
     @GET("api/onchat/statuses/create")
     suspend fun getStatusesMultipart(): Response<StatusesResponse>
 
-    // Official CashPay Media Videos API Engine
+    // New Official Video Upload Endpoint (POST /api/v1/media/upload)
     @Multipart
-    @POST("api/v1/media/videos")
+    @POST("api/v1/media/upload")
     suspend fun uploadVideo(
         @Part video: MultipartBody.Part,
         @Part("publisherType") publisherType: RequestBody? = null,

@@ -264,7 +264,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         // Active background sync loop to guarantee 100% zero missed messages or statuses (only when authenticated)
         viewModelScope.launch {
             while (isActive) {
-                delay(4500)
+                delay(10000) // Reduced frequency to 10s to prevent UI flicker
                 try {
                     if (_loginStep.value == LoginStep.AUTHENTICATED && !ApiClient.authToken.isNullOrBlank()) {
                         repository.fetchConversations()
@@ -943,7 +943,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun uploadVideo(uri: Uri, onComplete: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             _isUploading.value = true
-            _uploadProgress.value = 0.1f
+            _uploadProgress.value = 0.05f
             try {
                 val context = getApplication<Application>()
                 val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
@@ -951,20 +951,48 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     onComplete(false, "Impossible de lire le fichier")
                     return@launch
                 }
-                _uploadProgress.value = 0.3f
+                
+                // Real-time progress simulation (until we have a counting request body)
+                launch {
+                    var p = 0.1f
+                    while (p < 0.85f && _isUploading.value) {
+                        delay(600)
+                        p += 0.05f
+                        _uploadProgress.value = p
+                    }
+                }
+
                 val fileName = "video_${System.currentTimeMillis()}.mp4"
-                val result = repository.uploadVideoGeneral(bytes, fileName, "video/mp4")
-                _uploadProgress.value = 0.9f
+                val currentUserId = currentSession.value?.userId
+                val result = repository.uploadVideoGeneral(bytes, fileName, "video/mp4", publisherId = currentUserId)
+                
                 if (!result.isNullOrBlank()) {
+                    _uploadProgress.value = 1.0f
                     onComplete(true, null)
                 } else {
-                    onComplete(false, "Échec de l'envoi")
+                    onComplete(false, "Échec de l'envoi au serveur")
                 }
             } catch (e: Exception) {
                 onComplete(false, e.message)
             } finally {
                 _isUploading.value = false
-                _uploadProgress.value = 1.0f
+            }
+        }
+    }
+
+    fun sendAudioMessage(file: java.io.File) {
+        val convId = _activeConversationId.value ?: return
+        viewModelScope.launch {
+            try {
+                val bytes = file.readBytes()
+                val fileName = "voice_${System.currentTimeMillis()}.m4a"
+                val url = repository.uploadMedia(bytes, fileName, "audio/mp4")
+                if (url != null) {
+                    val finalUrl = if (url.startsWith("http")) url else "https://app.cashpay-all.com$url"
+                    repository.sendMessage(convId, "🎤 Note vocale", type = "audio", fileUrl = finalUrl, fileName = fileName)
+                }
+            } catch (e: Exception) {
+                Log.e("OnChatViewModel", "sendAudioMessage error: ${e.message}")
             }
         }
     }
@@ -976,6 +1004,12 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun toggleBiometric(enabled: Boolean) {
         viewModelScope.launch {
             repository.setBiometricEnabled(enabled)
+        }
+    }
+
+    fun setChatBackgroundUri(uri: String?) {
+        viewModelScope.launch {
+            repository.setChatBackgroundUri(uri)
         }
     }
 
@@ -1348,11 +1382,11 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         _activeConversationId.value = null
     }
 
-    fun sendMessage(text: String, type: String = "text") {
+    fun sendMessage(text: String, type: String = "text", metadata: Map<String, String>? = null) {
         val convId = _activeConversationId.value ?: return
         if (text.isBlank()) return
         viewModelScope.launch {
-            repository.sendMessage(convId, text.trim(), type = type)
+            repository.sendMessage(convId, text.trim(), type = type, metadata = metadata)
         }
     }
 

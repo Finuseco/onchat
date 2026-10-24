@@ -228,35 +228,73 @@ fun ContactCardBubble(
 ) {
     val context = LocalContext.current
 
+    val contactName = remember(message.content) {
+        message.content.substringBefore(" (").ifBlank { "Contact OnChat" }
+    }
+    val contactPhone = remember(message.content) {
+        message.content.substringAfter(" (").substringBefore(")").ifBlank { "" }
+    }
+    val walletId = remember(message.content) {
+        if (message.content.contains("Wallet:")) {
+            message.content.substringAfter("Wallet:").substringBefore(" • ").trim()
+        } else ""
+    }
+    val avatarUrl = remember(message.content) {
+        if (message.content.contains("Avatar:")) message.content.substringAfter("Avatar:").trim() else null
+    }
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = CashPayNavySurface),
-        modifier = Modifier.widthIn(min = 240.dp, max = 280.dp)
+        modifier = Modifier.widthIn(min = 250.dp, max = 290.dp)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(46.dp)
+                        .size(52.dp)
                         .clip(CircleShape)
                         .background(OnChatPrimaryGradient),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Default.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+                    if (!avatarUrl.isNullOrBlank()) {
+                        androidx.compose.foundation.Image(
+                            painter = coil.compose.rememberAsyncImagePainter(avatarUrl),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                        )
+                    } else {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = Color.White, modifier = Modifier.size(28.dp))
+                    }
                 }
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(12.dp))
                 Column {
-                    Text(
-                        text = message.content.substringBefore(" (").ifBlank { "Contact OnChat" },
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = message.content.substringAfter(" (").substringBefore(")").ifBlank { "Numéro disponible" },
-                        color = CashPayGrey,
-                        fontSize = 12.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = contactName,
+                            color = Color.White,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(Icons.Default.Verified, contentDescription = "Actif", tint = OnChatCyan, modifier = Modifier.size(16.dp))
+                    }
+                    if (contactPhone.isNotBlank()) {
+                        Text(
+                            text = contactPhone,
+                            color = CashPayGrey,
+                            fontSize = 13.sp
+                        )
+                    }
+                    if (walletId.isNotBlank()) {
+                        Text(
+                            text = "Wallet: $walletId",
+                            color = OnChatCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             }
 
@@ -266,13 +304,26 @@ fun ContactCardBubble(
 
             Button(
                 onClick = {
-                    Toast.makeText(context, "Contact ajouté à vos favoris", Toast.LENGTH_SHORT).show()
+                    try {
+                        val intent = Intent(android.provider.ContactsContract.Intents.Insert.ACTION).apply {
+                            type = android.provider.ContactsContract.RawContacts.CONTENT_TYPE
+                            putExtra(android.provider.ContactsContract.Intents.Insert.NAME, contactName)
+                            if (contactPhone.isNotBlank()) {
+                                putExtra(android.provider.ContactsContract.Intents.Insert.PHONE, contactPhone)
+                            }
+                        }
+                        context.startActivity(intent)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "Numéro : $contactPhone", Toast.LENGTH_LONG).show()
+                    }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = OnChatViolet),
                 shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.fillMaxWidth().height(36.dp)
+                modifier = Modifier.fillMaxWidth().height(38.dp)
             ) {
-                Text("Ajouter aux contacts", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Icon(Icons.Default.PersonAdd, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Enregistrer dans le téléphone", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(4.dp))

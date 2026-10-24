@@ -19,6 +19,9 @@ interface SessionDao {
 
     @Query("UPDATE user_session SET biometricEnabled = :enabled WHERE id = 1")
     suspend fun setBiometricEnabled(enabled: Boolean)
+
+    @Query("UPDATE user_session SET customChatBackgroundUri = :uri WHERE id = 1")
+    suspend fun setChatBackgroundUri(uri: String?)
 }
 
 @Dao

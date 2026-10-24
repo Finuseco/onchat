@@ -76,8 +76,9 @@ fun ChatAttachmentSheet(
     onSendMoneyClick: (selectedCurrency: String) -> Unit,
     onSendLocation: (title: String, subtitle: String, lat: Double, lng: Double) -> Unit,
     onSendFile: (fileName: String, fileType: String, sizeStr: String) -> Unit,
-    onSendContact: (name: String, phone: String, walletId: String) -> Unit,
-    onSendPoll: (question: String, options: List<String>) -> Unit
+    onSendContact: (name: String, phone: String, walletId: String, avatar: String?) -> Unit,
+    onSendPoll: (question: String, options: List<String>) -> Unit,
+    searchProfile: suspend (String) -> com.example.data.model.ContactCheckResult? = { null }
 ) {
     val context = LocalContext.current
     var currentTab by remember { mutableStateOf(AttachmentTab.WALLET) }
@@ -123,20 +124,44 @@ fun ChatAttachmentSheet(
                     AttachmentTab.POSITION -> {
                         PositionAttachmentView(
                             onSendSelectedLocation = {
+                                var realLat = -4.3217
+                                var realLng = 15.3126
+                                try {
+                                    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+                                    val loc = lm?.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                                        ?: lm?.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                                    if (loc != null) {
+                                        realLat = loc.latitude
+                                        realLng = loc.longitude
+                                    }
+                                } catch (_: Exception) { }
+
                                 onSendLocation(
-                                    "Position partagée",
-                                    "Kinshasa, Gombe, République Démocratique du Congo",
-                                    -4.3217,
-                                    15.3126
+                                    "Position GPS GPS Real-Time",
+                                    "Kinshasa, RDC ($realLat, $realLng)",
+                                    realLat,
+                                    realLng
                                 )
                                 onDismiss()
                             },
                             onSendLiveLocation = {
+                                var realLat = -4.3217
+                                var realLng = 15.3126
+                                try {
+                                    val lm = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+                                    val loc = lm?.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                                        ?: lm?.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                                    if (loc != null) {
+                                        realLat = loc.latitude
+                                        realLng = loc.longitude
+                                    }
+                                } catch (_: Exception) { }
+
                                 onSendLocation(
-                                    "Position en direct (1 heure)",
-                                    "Actualisée en continu • GPS Haute Précision",
-                                    -4.3217,
-                                    15.3126
+                                    "Position en direct (GPS Actif)",
+                                    "Actualisée en temps réel ($realLat, $realLng)",
+                                    realLat,
+                                    realLng
                                 )
                                 onDismiss()
                             },
@@ -187,10 +212,11 @@ fun ChatAttachmentSheet(
                     }
                     AttachmentTab.CONTACT -> {
                         ContactAttachmentView(
-                            onSelectContact = { name, phone, walletId ->
-                                onSendContact(name, phone, walletId)
+                            onSelectContact = { name, phone, walletId, avatar ->
+                                onSendContact(name, phone, walletId, avatar)
                                 onDismiss()
-                            }
+                            },
+                            searchProfile = searchProfile
                         )
                     }
                 }
@@ -1535,11 +1561,13 @@ fun ListAttachmentView(
 // --- Tab 5: CONTACT VIEW ---
 @Composable
 fun ContactAttachmentView(
-    onSelectContact: (name: String, phone: String, walletId: String) -> Unit
+    onSelectContact: (name: String, phone: String, walletId: String, avatar: String?) -> Unit,
+    searchProfile: suspend (String) -> com.example.data.model.ContactCheckResult? = { null }
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var deviceContacts by remember { mutableStateOf<List<PhoneBookContact>>(emptyList()) }
+    var verifiedStatus by remember { mutableStateOf<Map<String, com.example.data.model.ContactCheckResult>>(emptyMap()) }
     var hasPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -1634,9 +1662,25 @@ fun ContactAttachmentView(
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(filteredContacts) { contact ->
+                        val status = verifiedStatus[contact.phone]
+                        
+                        LaunchedEffect(contact.phone) {
+                            if (!verifiedStatus.containsKey(contact.phone)) {
+                                val res = searchProfile(contact.phone)
+                                if (res != null) {
+                                    verifiedStatus = verifiedStatus + (contact.phone to res)
+                                }
+                            }
+                        }
+
                         Card(
                             onClick = {
-                                onSelectContact(contact.name, contact.phone, "")
+                                onSelectContact(
+                                    contact.name, 
+                                    contact.phone, 
+                                    status?.walletId ?: "",
+                                    status?.avatar
+                                )
                             },
                             shape = RoundedCornerShape(14.dp),
                             colors = CardDefaults.cardColors(containerColor = CashPayNavySurface)
@@ -1651,20 +1695,38 @@ fun ContactAttachmentView(
                                     modifier = Modifier
                                         .size(44.dp)
                                         .clip(CircleShape)
-                                        .background(OnChatPrimaryGradient),
+                                        .background(if (status?.onChat == true) OnChatPrimaryGradient else Brush.linearGradient(listOf(Color.Gray, Color.DarkGray))),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text(
-                                        text = contact.name.take(1).uppercase(Locale.ROOT),
-                                        color = Color.White,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 18.sp
-                                    )
+                                    if (status?.avatar != null) {
+                                        androidx.compose.foundation.Image(
+                                            painter = coil.compose.rememberAsyncImagePainter(status.avatar),
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                        )
+                                    } else {
+                                        Text(
+                                            text = contact.name.take(1).uppercase(Locale.ROOT),
+                                            color = Color.White,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 18.sp
+                                        )
+                                    }
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(contact.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(contact.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                        if (status?.onChat == true) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Icon(Icons.Default.Verified, contentDescription = "Actif", tint = OnChatCyan, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
                                     Text(contact.phone, color = CashPayGrey, fontSize = 12.sp)
+                                    if (status?.walletId != null) {
+                                        Text("Wallet: ${status.walletId}", color = OnChatCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
                                 Icon(Icons.Default.Send, contentDescription = "Envoyer", tint = OnChatCyan, modifier = Modifier.size(18.dp))
                             }

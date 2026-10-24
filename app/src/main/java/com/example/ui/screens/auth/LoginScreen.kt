@@ -123,67 +123,31 @@ fun LoginScreen(viewModel: OnChatViewModel) {
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .imePadding() // Critical: Handle keyboard opening
+                .verticalScroll(rememberScrollState()) 
+                .padding(horizontal = 20.dp, vertical = 16.dp), // Slightly reduced vertical padding
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Top
         ) {
-            // Official OnChat Logo
-            Box(
-                modifier = Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color.White.copy(alpha = 0.05f))
-                    .padding(4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.onchat_logo),
-                    contentDescription = "Logo officiel OnChat",
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clip(RoundedCornerShape(12.dp)),
-                    contentScale = ContentScale.Fit
-                )
-            }
+            Spacer(modifier = Modifier.height(10.dp)) // Reduced spacer
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Brand Wordmark: "On" in purple (#B660ED), "Chat" in cyan (#44BBF5)
+            // Simplified Brand: Just "OnChat"
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "On",
                     color = OnChatVioletLight,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 0.5.sp
+                    fontSize = 28.sp, // Slightly reduced
+                    fontWeight = FontWeight.ExtraBold
                 )
                 Text(
                     text = "Chat",
                     color = OnChatCyan,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 0.5.sp
+                    fontSize = 28.sp, // Slightly reduced
+                    fontWeight = FontWeight.ExtraBold
                 )
             }
 
-            Spacer(modifier = Modifier.height(2.dp))
-
-            // Subtitle pill with official gradient
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50.dp))
-                    .background(brush = OnChatPrimaryGradient)
-                    .padding(horizontal = 12.dp, vertical = 3.dp)
-            ) {
-                Text(
-                    text = "Écosystème CashPay • Messagerie & Appels",
-                    color = Color.White,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(20.dp)) // Reduced spacer
 
             // Stepper indicators: 4 sequential steps
             Row(
@@ -1193,25 +1157,26 @@ private fun PinKeypad(
     )
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         digits.forEach { row ->
             Row(
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 row.forEach { key ->
                     when (key) {
                         null -> {
-                            Spacer(modifier = Modifier.size(46.dp))
+                            Spacer(modifier = Modifier.size(68.dp))
                         }
                         '<' -> {
                             Box(
                                 modifier = Modifier
-                                    .size(46.dp)
+                                    .size(68.dp)
                                     .clip(CircleShape)
                                     .background(CashPayNavyDark)
+                                    .border(1.5.dp, CashPayNavyBorder, CircleShape)
                                     .clickable { onBackspace() },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -1219,24 +1184,24 @@ private fun PinKeypad(
                                     imageVector = Icons.Default.Backspace,
                                     contentDescription = "Effacer",
                                     tint = CashPayGrey,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
                         else -> {
                             Box(
                                 modifier = Modifier
-                                    .size(46.dp)
+                                    .size(68.dp)
                                     .clip(CircleShape)
                                     .background(CashPayNavyDark)
-                                    .border(1.dp, CashPayNavyBorder, CircleShape)
+                                    .border(1.5.dp, OnChatCyan.copy(alpha = 0.6f), CircleShape)
                                     .clickable { onDigit(key) },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
                                     text = key.toString(),
                                     color = Color.White,
-                                    fontSize = 18.sp,
+                                    fontSize = 24.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }

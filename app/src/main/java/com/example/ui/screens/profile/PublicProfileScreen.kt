@@ -26,8 +26,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.data.model.SocialMediaItem
+import com.example.data.model.VideoItem
 import com.example.ui.components.AvatarBadge
+import com.example.ui.components.StatusVideoPlayer
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.OnChatViewModel
 
@@ -42,6 +43,7 @@ fun PublicProfileScreen(
     val profileResp by viewModel.publicProfile.collectAsState()
     val searchedProfile by viewModel.searchedProfile.collectAsState()
     val conversations by viewModel.conversations.collectAsState()
+    val realVideosFeed by viewModel.realVideosFeed.collectAsState()
     val isLoading by viewModel.isPublicProfileLoading.collectAsState()
     val context = LocalContext.current
 
@@ -58,12 +60,15 @@ fun PublicProfileScreen(
         if (phone.isNotBlank()) {
             viewModel.fetchPublicProfile(phone)
             viewModel.searchProfileByPhoneState(phone)
+            viewModel.fetchVideosFeed()
         }
     }
 
     // Resolve user data with cascading fallbacks
     val pFromPublic = profileResp?.profile
     val pFromSearch = searchedProfile?.profile
+
+    val targetUserId = pFromPublic?.id ?: pFromSearch?.userId ?: 0L
 
     val fullName = pFromPublic?.resolvedFullName
         ?: pFromSearch?.resolvedFullName
@@ -82,7 +87,7 @@ fun PublicProfileScreen(
     val profession = pFromPublic?.profession
         ?: pFromSearch?.profession
         ?: targetConv?.contactProfession
-        ?: "Membre OnChat"
+        ?: "Créateur OnChat"
 
     val walletId = pFromPublic?.walletId
         ?: pFromSearch?.resolvedWalletId
@@ -99,242 +104,487 @@ fun PublicProfileScreen(
     val stats = profileResp?.stats
     val media = profileResp?.media ?: emptyList()
 
-    Scaffold(
-        containerColor = CashPayNavyDark,
-        topBar = {
-            TopAppBar(
-                title = { Text("Profil Public", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = Color.Transparent,
-                    titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White
-                )
-            )
+    var isFollowing by remember(relation) {
+        mutableStateOf(relation?.following == true || relation?.isFriend == true)
+    }
+
+    var selectedVideoForPlayback by remember { mutableStateOf<VideoItem?>(null) }
+    var selectedMediaTab by remember { mutableIntStateOf(0) } // 0: Vidées, 1: Photos
+
+    // Filter user's published videos from feed
+    val userVideos = remember(realVideosFeed, targetUserId, phone) {
+        realVideosFeed.filter { video ->
+            val pub = video.publisher
+            val pubId = pub?.id ?: pub?.ownerId
+            val pubPhone = pub?.phone
+            (targetUserId != 0L && pubId == targetUserId) || (!phone.isNullOrBlank() && pubPhone == phone)
         }
-    ) { padding ->
-        Column(
+    }
+
+    if (selectedVideoForPlayback != null) {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(top = padding.calculateTopPadding())
-                .verticalScroll(rememberScrollState())
+                .background(Color.Black)
         ) {
-            // Header Zone (Cover + Avatar)
-            Box(
+            StatusVideoPlayer(
+                videoUrl = selectedVideoForPlayback!!.resolvedUrl,
+                modifier = Modifier.fillMaxSize()
+            )
+            IconButton(
+                onClick = { selectedVideoForPlayback = null },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(260.dp)
+                    .padding(top = 40.dp, start = 16.dp)
+                    .clip(CircleShape)
+                    .background(Color.Black.copy(alpha = 0.6f))
             ) {
-                // Cover Photo
-                AsyncImage(
-                    model = coverUrl,
-                    contentDescription = "Couverture",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp)
-                        .background(CashPayNavy),
-                    contentScale = ContentScale.Crop
-                )
-
-                // Profile Photo Overlap
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 0.dp)
-                ) {
-                    AvatarBadge(
-                        name = fullName,
-                        avatarUrl = avatarUrl,
-                        size = 120.dp,
-                        isGroup = false,
-                        isOnline = true
-                    )
-                }
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Fermer", tint = Color.White)
             }
-
-            // Info Zone
+        }
+    } else {
+        Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+            containerColor = CashPayNavyDark,
+            topBar = {
+                TopAppBar(
+                    title = { Text("Profil Public", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour", tint = Color.White)
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color.Transparent,
+                        titleContentColor = Color.White,
+                        navigationIconContentColor = Color.White
+                    )
+                )
+            }
+        ) { padding ->
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = 32.dp)
             ) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = fullName,
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                    if (isVerified) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Icon(
-                            imageVector = Icons.Default.Verified,
-                            contentDescription = "Vérifié",
-                            tint = OnChatCyan,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                }
-
-                if (profession.isNotBlank()) {
-                    Text(
-                        text = profession,
-                        color = CashPayGrey,
-                        fontSize = 15.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                if (walletId.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Wallet ID: $walletId",
-                        color = OnChatCyan,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-
-                val location = listOfNotNull(city, country).filter { it.isNotBlank() }.joinToString(", ")
-                if (location.isNotBlank()) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(top = 4.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.LocationOn,
-                            contentDescription = null,
-                            tint = CashPayGrey,
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = location,
-                            color = CashPayGrey,
-                            fontSize = 14.sp
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Social Actions Row (Message, Call, Transfer)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                // Header Cover & Avatar Overlap (Full screen top)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
                 ) {
-                    Button(
-                        onClick = {
-                            viewModel.openContactChat(
-                                name = fullName,
-                                avatarUrl = avatarUrl,
-                                phone = phone,
-                                walletId = walletId,
-                                recipientUserId = null,
-                                bitcoinAddress = null
-                            )
-                            onBack()
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = OnChatCyan),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Chat, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Message", color = Color.Black, fontWeight = FontWeight.Bold)
-                    }
+                    // Full Edge-to-Edge Cover Photo
+                    AsyncImage(
+                        model = coverUrl,
+                        contentDescription = "Couverture",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(210.dp)
+                            .background(CashPayNavy),
+                        contentScale = ContentScale.Crop
+                    )
 
-                    Button(
-                        onClick = {
-                            viewModel.startCall(
-                                peerName = fullName,
-                                peerWalletId = walletId.ifBlank { phone },
-                                peerAvatar = avatarUrl,
-                                isVideo = false
-                            )
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = OnChatViolet),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Icon(Icons.Default.Call, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Appel", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Stats Row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    StatItem(label = "Abonnés", count = stats?.followers ?: 0)
-                    StatItem(label = "Suivis", count = stats?.following ?: 0)
-                    StatItem(label = "Amis", count = stats?.friends ?: 0)
-                }
-
-                Spacer(modifier = Modifier.height(32.dp))
-
-                // Media Grid Section
-                Text(
-                    text = "PHOTOS / MÉDIAS PUBLICS",
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (media.isEmpty()) {
+                    // Subtle Dark Overlay
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF18181B)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("Aucun média public publié pour le moment", color = CashPayGrey, fontSize = 13.sp)
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
+                            .height(210.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Black.copy(alpha = 0.5f),
+                                        Color.Transparent,
+                                        CashPayNavyDark.copy(alpha = 0.8f)
+                                    )
+                                )
+                            )
+                    )
+
+                    // Centered Overlapping Avatar Badge
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 400.dp),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                            .align(Alignment.BottomCenter)
                     ) {
-                        items(media) { item ->
-                            AsyncImage(
-                                model = item.resolvedUrl,
-                                contentDescription = null,
-                                modifier = Modifier
-                                    .aspectRatio(1f)
-                                    .clip(RoundedCornerShape(8.dp)),
-                                contentScale = ContentScale.Crop
+                        AvatarBadge(
+                            name = fullName,
+                            avatarUrl = avatarUrl,
+                            size = 124.dp,
+                            isGroup = false,
+                            isOnline = true
+                        )
+                    }
+                }
+
+                // Info Section
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = fullName,
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        if (isVerified) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Default.Verified,
+                                contentDescription = "Vérifié",
+                                tint = OnChatCyan,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
+
+                    if (profession.isNotBlank()) {
+                        Text(
+                            text = profession,
+                            color = CashPayGrey,
+                            fontSize = 14.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+
+                    if (walletId.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Wallet ID: $walletId",
+                            color = OnChatCyan,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    val location = listOfNotNull(city, country).filter { it.isNotBlank() }.joinToString(", ")
+                    if (location.isNotBlank()) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 4.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = CashPayGrey,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = location,
+                                color = CashPayGrey,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Social Action Buttons: Icon on top, Text below ("Chat", "Appel", "S'abonner")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 1. CHAT BUTTON (Icon on top, "Chat" below)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.clickable {
+                                viewModel.openContactChat(
+                                    name = fullName,
+                                    avatarUrl = avatarUrl,
+                                    phone = phone,
+                                    walletId = walletId,
+                                    recipientUserId = null,
+                                    bitcoinAddress = null
+                                )
+                                onBack()
+                            }
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .clip(CircleShape)
+                                    .background(OnChatCyan),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Chat,
+                                    contentDescription = "Chat",
+                                    tint = Color.Black,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("Chat", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        // 2. APPEL BUTTON (Icon on top, "Appel" below)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.clickable {
+                                viewModel.startCall(
+                                    peerName = fullName,
+                                    peerWalletId = walletId.ifBlank { phone },
+                                    peerAvatar = avatarUrl,
+                                    isVideo = false
+                                )
+                            }
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .clip(CircleShape)
+                                    .background(OnChatViolet),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Call,
+                                    contentDescription = "Appel",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("Appel", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        // 3. S'ABONNER / FOLLOW BUTTON (Icon on top, "S'abonner" / "Abonné" below)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.clickable {
+                                isFollowing = !isFollowing
+                                val action = if (isFollowing) "follow" else "unfollow"
+                                viewModel.performSocialAction(targetUserId, action)
+                                val msg = if (isFollowing) "Abonné à $fullName ! 🔔" else "Désabonné"
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(52.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isFollowing) CashPayGreen else OnChatMagenta),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isFollowing) Icons.Default.Check else Icons.Default.PersonAdd,
+                                    contentDescription = "Abonnement",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = if (isFollowing) "Abonné" else "S'abonner",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Stats Bar
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(CashPayNavySurface)
+                            .padding(vertical = 14.dp, horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        StatMetric(label = "Abonnés", count = stats?.followers ?: if (isFollowing) 1 else 0)
+                        Divider(modifier = Modifier.height(28.dp).width(1.dp), color = CashPayNavyBorder)
+                        StatMetric(label = "Suivis", count = stats?.following ?: 0)
+                        Divider(modifier = Modifier.height(28.dp).width(1.dp), color = CashPayNavyBorder)
+                        StatMetric(label = "Publications", count = userVideos.size + media.size)
+                    }
+
+                    Spacer(modifier = Modifier.height(28.dp))
+
+                    // Media Tabs (0: Vidéos Shorts, 1: Photos & Albums)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(CashPayNavySurface, shape = RoundedCornerShape(12.dp))
+                            .padding(4.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (selectedMediaTab == 0) OnChatVioletDeep else Color.Transparent)
+                                .clickable { selectedMediaTab = 0 }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Videocam, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Vidéos (${userVideos.size})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (selectedMediaTab == 1) OnChatVioletDeep else Color.Transparent)
+                                .clickable { selectedMediaTab = 1 }
+                                .padding(vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Photos (${media.size})", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Media Content Grid
+                    if (selectedMediaTab == 0) {
+                        // Vidéos Section with Views & Comments
+                        if (userVideos.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(CashPayNavySurface),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.VideocamOff, contentDescription = null, tint = CashPayGrey, modifier = Modifier.size(36.dp))
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("Aucune vidéo publiée par cet utilisateur", color = CashPayGrey, fontSize = 13.sp)
+                                }
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(3),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 500.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                items(userVideos) { video ->
+                                    Box(
+                                        modifier = Modifier
+                                            .aspectRatio(0.75f)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFF1E1E24))
+                                            .clickable { selectedVideoForPlayback = video }
+                                    ) {
+                                        AsyncImage(
+                                            model = video.resolvedThumbnailUrl ?: video.resolvedUrl,
+                                            contentDescription = null,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+
+                                        // Dark gradient for views & comments text
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(
+                                                    Brush.verticalGradient(
+                                                        colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f))
+                                                    )
+                                                )
+                                        )
+
+                                        // Play Icon in center
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.Center)
+                                                .size(32.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.Black.copy(alpha = 0.5f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                        }
+
+                                        // Views and Comments at bottom
+                                        Column(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomStart)
+                                                .padding(6.dp)
+                                        ) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.Visibility, contentDescription = null, tint = Color.White, modifier = Modifier.size(10.dp))
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text("${video.interactions?.views ?: 0}", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Default.Favorite, contentDescription = null, tint = OnChatMagenta, modifier = Modifier.size(10.dp))
+                                                Spacer(modifier = Modifier.width(3.dp))
+                                                Text("${video.interactions?.realLikesCount ?: 0}", color = Color.White, fontSize = 10.sp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Photos Section
+                        if (media.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(140.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(CashPayNavySurface),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = CashPayGrey, modifier = Modifier.size(36.dp))
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text("Aucune photo disponible", color = CashPayGrey, fontSize = 13.sp)
+                                }
+                            }
+                        } else {
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(3),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 500.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                items(media) { item ->
+                                    AsyncImage(
+                                        model = item.resolvedUrl,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .aspectRatio(1f)
+                                            .clip(RoundedCornerShape(8.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
-                
-                Spacer(modifier = Modifier.height(32.dp))
             }
         }
     }
 }
 
 @Composable
-fun StatItem(label: String, count: Int) {
+fun StatMetric(label: String, count: Int) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "$count", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Text(text = label, color = CashPayGrey, fontSize = 12.sp)
+        Text(text = label, color = CashPayGrey, fontSize = 11.sp)
     }
 }

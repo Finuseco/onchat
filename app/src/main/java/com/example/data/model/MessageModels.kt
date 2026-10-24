@@ -14,6 +14,7 @@ data class Message(
     val senderId: String = "1",
     val senderWalletId: String? = null,
     val senderName: String,
+    val senderAvatar: String? = null,
     val content: String,
     val timestamp: Long = System.currentTimeMillis(),
     val isMine: Boolean = false,
@@ -28,7 +29,21 @@ data class Message(
     val transferAmount: Double? = null,
     val transferCurrency: String? = null,
     val transferReference: String? = null
-)
+) {
+    val metadata: Map<String, String>? by lazy {
+        if (metadataJson.isNullOrBlank()) null
+        else {
+            try {
+                val moshi = com.squareup.moshi.Moshi.Builder().build()
+                val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+                val adapter = moshi.adapter<Map<String, String>>(type)
+                adapter.fromJson(metadataJson)
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+}
 
 data class Conversation(
     val id: String,

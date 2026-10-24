@@ -272,6 +272,7 @@ fun UserProfileScreen(
     }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         containerColor = CashPayNavyDark
     ) { padding ->
         Column(
