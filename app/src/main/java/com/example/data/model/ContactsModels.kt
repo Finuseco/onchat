@@ -39,6 +39,7 @@ data class ProfileDto(
     @Json(name = "verification_status") val verification_status: String? = null,
     @Json(name = "availabilityStatus") val availabilityStatus: String? = null,
     @Json(name = "availability_status") val availability_status: String? = null,
+    @Json(name = "bio") val bio: String? = null,
     @Json(name = "createdAt") val createdAt: String? = null,
     @Json(name = "astro") val astro: AstroInfo? = null,
     @Json(name = "bitcoin") val bitcoin: ProfileBitcoinDto? = null,

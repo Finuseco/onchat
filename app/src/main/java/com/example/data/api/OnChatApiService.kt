@@ -144,6 +144,76 @@ interface OnChatApiService {
         @Query("walletId") walletId: String? = null
     ): Response<CallsHistoryResponse>
 
+    // --- FINUSECO SARL / CashPay All Meetings API (Cahier des charges) ---
+    // 3.1 Créer une réunion
+    @POST("api/v1/meetings/create")
+    suspend fun createMeeting(
+        @Body request: CreateMeetingRequest
+    ): Response<CreateMeetingResponse>
+
+    // 3.2 Lister les réunions récentes
+    @GET("api/v1/meetings/list")
+    suspend fun getMeetingsList(
+        @Query("limit") limit: Int = 20
+    ): Response<MeetingsListResponse>
+
+    // 3.3 Obtenir le statut d'une réunion
+    @GET("api/v1/meetings/{meetCode}/status")
+    suspend fun getMeetingStatus(
+        @Path("meetCode") meetCode: String
+    ): Response<MeetingStatusResponse>
+
+    // 3.4 Rejoindre une réunion
+    @POST("api/v1/meetings/{meetCode}/join")
+    suspend fun joinMeeting(
+        @Path("meetCode") meetCode: String
+    ): Response<JoinMeetingResponse>
+
+    // 3.5 Consulter les participants
+    @GET("api/v1/meetings/{meetCode}/participants")
+    suspend fun getMeetingParticipants(
+        @Path("meetCode") meetCode: String
+    ): Response<MeetingParticipantsResponse>
+
+    // 3.6 Quitter une réunion
+    @POST("api/v1/meetings/{meetCode}/leave")
+    suspend fun leaveMeeting(
+        @Path("meetCode") meetCode: String
+    ): Response<MeetingActionSimpleResponse>
+
+    // 3.7 Terminer une réunion (Hôte uniquement)
+    @POST("api/v1/meetings/{meetCode}/end")
+    suspend fun endMeeting(
+        @Path("meetCode") meetCode: String
+    ): Response<MeetingActionSimpleResponse>
+
+    // 3.8 Lever ou baisser la main
+    @POST("api/v1/meetings/{meetCode}/raise-hand")
+    suspend fun raiseHand(
+        @Path("meetCode") meetCode: String,
+        @Body request: RaiseHandRequest
+    ): Response<RaiseHandResponse>
+
+    // 3.9 Accorder ou retirer le droit de parole (Hôte uniquement)
+    @POST("api/v1/meetings/{meetCode}/grant-speech")
+    suspend fun grantSpeech(
+        @Path("meetCode") meetCode: String,
+        @Body request: GrantSpeechRequest
+    ): Response<GrantSpeechResponse>
+
+    // 3.10 Consulter la facturation d'une réunion
+    @GET("api/v1/meetings/{meetCode}/billing")
+    suspend fun getMeetingBilling(
+        @Path("meetCode") meetCode: String
+    ): Response<MeetingBillingResponse>
+
+    // 3.11 Modifier la facturation d'une réunion (Hôte uniquement)
+    @POST("api/v1/meetings/{meetCode}/billing")
+    suspend fun updateMeetingBilling(
+        @Path("meetCode") meetCode: String,
+        @Body request: UpdateMeetingBillingRequest
+    ): Response<UpdateMeetingBillingResponse>
+
     // 4. Live Stage Engine
     @POST("api/v1/live/rooms/create")
     suspend fun createLiveRoom(

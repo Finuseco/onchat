@@ -75,7 +75,7 @@ fun ChatAttachmentSheet(
     onDismiss: () -> Unit,
     onSendMoneyClick: (selectedCurrency: String) -> Unit,
     onSendLocation: (title: String, subtitle: String, lat: Double, lng: Double) -> Unit,
-    onSendFile: (fileName: String, fileType: String, sizeStr: String) -> Unit,
+    onSendFile: (fileName: String, fileType: String, sizeStr: String, uri: Uri?) -> Unit,
     onSendContact: (name: String, phone: String, walletId: String, avatar: String?) -> Unit,
     onSendPoll: (question: String, options: List<String>) -> Unit,
     searchProfile: suspend (String) -> com.example.data.model.ContactCheckResult? = { null }
@@ -188,7 +188,7 @@ fun ChatAttachmentSheet(
                                 onSendMoneyClick(selectedCurrency)
                             },
                             onRequestMoney = { amount, selectedCurrency ->
-                                onSendFile("Demande de paiement : $amount $selectedCurrency", "payment_request", "1 req")
+                                onSendFile("Demande de paiement : $amount $selectedCurrency", "payment_request", "1 req", null)
                                 Toast.makeText(context, "Demande de $amount $selectedCurrency envoyée !", Toast.LENGTH_SHORT).show()
                                 onDismiss()
                             }
@@ -196,8 +196,8 @@ fun ChatAttachmentSheet(
                     }
                     AttachmentTab.FILE -> {
                         FileAttachmentView(
-                            onSelectFile = { name, type, size ->
-                                onSendFile(name, type, size)
+                            onSelectFile = { name, type, size, uri ->
+                                onSendFile(name, type, size, uri)
                                 onDismiss()
                             }
                         )
@@ -1277,7 +1277,7 @@ fun WalletAttachmentView(
 // --- Tab 3: FILE VIEW ---
 @Composable
 fun FileAttachmentView(
-    onSelectFile: (name: String, type: String, size: String) -> Unit
+    onSelectFile: (name: String, type: String, size: String, uri: Uri?) -> Unit
 ) {
     val context = LocalContext.current
 
@@ -1287,7 +1287,7 @@ fun FileAttachmentView(
         uri?.let {
             val fileName = getFileNameFromUri(context, it) ?: "image_${System.currentTimeMillis()}.jpg"
             val fileSize = getFileSizeFromUri(context, it) ?: "Photo"
-            onSelectFile(fileName, "image", fileSize)
+            onSelectFile(fileName, "image", fileSize, it)
         }
     }
 
@@ -1297,7 +1297,7 @@ fun FileAttachmentView(
         uri?.let {
             val fileName = getFileNameFromUri(context, it) ?: "document_${System.currentTimeMillis()}.pdf"
             val fileSize = getFileSizeFromUri(context, it) ?: "Doc"
-            onSelectFile(fileName, "doc", fileSize)
+            onSelectFile(fileName, "doc", fileSize, it)
         }
     }
 
@@ -1307,7 +1307,7 @@ fun FileAttachmentView(
         uri?.let {
             val fileName = getFileNameFromUri(context, it) ?: "audio_${System.currentTimeMillis()}.mp3"
             val fileSize = getFileSizeFromUri(context, it) ?: "Audio"
-            onSelectFile(fileName, "audio", fileSize)
+            onSelectFile(fileName, "audio", fileSize, it)
         }
     }
 
@@ -1317,7 +1317,7 @@ fun FileAttachmentView(
         uri?.let {
             val fileName = getFileNameFromUri(context, it) ?: "video_${System.currentTimeMillis()}.mp4"
             val fileSize = getFileSizeFromUri(context, it) ?: "Vidéo"
-            onSelectFile(fileName, "video", fileSize)
+            onSelectFile(fileName, "video", fileSize, it)
         }
     }
 

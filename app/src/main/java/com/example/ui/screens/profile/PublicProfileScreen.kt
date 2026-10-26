@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -249,6 +250,86 @@ fun PublicProfileScreen(
                             fontSize = 14.sp,
                             textAlign = TextAlign.Center
                         )
+                    }
+
+                    val bio = pFromPublic?.bio ?: pFromSearch?.bio ?: targetConv?.contactBio
+                    val activity = pFromPublic?.activityDescription ?: pFromSearch?.activityDescription ?: targetConv?.contactActivityDescription
+                    
+                    if (!bio.isNullOrBlank() || !activity.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(CashPayNavySurface)
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = "À PROPOS",
+                                color = OnChatCyan,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
+                            )
+                            if (!bio.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = bio,
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    lineHeight = 22.sp
+                                )
+                            }
+                            if (!activity.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(if (bio.isNullOrBlank()) 8.dp else 12.dp))
+                                Text(
+                                    text = activity,
+                                    color = CashPayGrey,
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp
+                                )
+                            }
+                        }
+                    }
+
+                    // Details Section (Nationality, Language, Astro)
+                    val nationality = pFromPublic?.nationality ?: pFromSearch?.nationality ?: targetConv?.contactNationality
+                    val language = pFromPublic?.language ?: pFromSearch?.language ?: targetConv?.contactLanguage
+                    val birthDate = pFromPublic?.resolvedBirthDate ?: targetConv?.contactBirthDate
+                    
+                    val astroSign = searchedProfile?.profile?.astro?.resolvedSign ?: targetConv?.contactAstroNameFr ?: targetConv?.contactAstroSign
+                    val astroSymbol = searchedProfile?.profile?.astro?.resolvedSymbol ?: targetConv?.contactAstroSymbol
+                    
+                    if (!nationality.isNullOrBlank() || !language.isNullOrBlank() || !birthDate.isNullOrBlank() || !astroSign.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(CashPayNavySurface)
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = "DÉTAILS",
+                                color = OnChatCyan,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp
+                            )
+                            
+                            if (!nationality.isNullOrBlank()) {
+                                DetailItem(Icons.Default.Flag, "Nationalité", nationality)
+                            }
+                            if (!language.isNullOrBlank()) {
+                                DetailItem(Icons.Default.Language, "Langue", language)
+                            }
+                            if (!birthDate.isNullOrBlank()) {
+                                DetailItem(Icons.Default.Cake, "Anniversaire", birthDate)
+                            }
+                            if (!astroSign.isNullOrBlank()) {
+                                DetailItem(Icons.Default.AutoAwesome, "Signe Astro", "${astroSymbol ?: ""} $astroSign")
+                            }
+                        }
                     }
 
                     if (walletId.isNotBlank()) {
@@ -577,6 +658,23 @@ fun PublicProfileScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun DetailItem(icon: ImageVector, label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = OnChatCyan, modifier = Modifier.size(18.dp))
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Text(text = label, color = CashPayGrey, fontSize = 11.sp)
+            Text(text = value, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

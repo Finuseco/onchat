@@ -71,6 +71,7 @@ fun ChatDetailScreen(
         conversations.find { it.id == conversationId }
     }
     val messages by viewModel.activeMessages.collectAsState()
+    val session by viewModel.currentSession.collectAsState()
     val isSkeletonLoading by viewModel.isSkeletonLoading.collectAsState()
     val walletData by viewModel.walletData.collectAsState()
     val isWalletLoading by viewModel.isWalletLoading.collectAsState()
@@ -129,344 +130,345 @@ fun ChatDetailScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                onOpenProfile?.invoke(conversationId)
-                            }
-                    ) {
-                        AvatarBadge(
-                            name = conv?.name ?: "Discussion",
-                            avatarUrl = conv?.avatarUrl,
-                            size = 40.dp,
-                            isGroup = conv?.isGroup ?: false
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column {
-                            Text(
-                                text = conv?.name ?: "Discussion",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = when {
-                                    typingUser != null -> "✍️ $typingUser écrit..."
-                                    conv?.isGroup == true -> "Groupe OnChat • ${conv.currency ?: "USD"}"
-                                    else -> "en ligne • CashPay"
-                                },
-                                color = if (typingUser != null) Color(0xFF4ECCA3) else OnChatCyan,
-                                fontSize = 12.sp,
-                                fontWeight = if (typingUser != null) FontWeight.Medium else FontWeight.Normal
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Retour",
-                            tint = Color.White
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = {
-                        viewModel.startCall(
-                            peerName = conv?.name ?: "Contact",
-                            peerWalletId = conv?.contactWalletId ?: "",
-                            peerAvatar = conv?.avatarUrl,
-                            isVideo = false
-                        )
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.Call,
-                            contentDescription = "Appel audio",
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(onClick = {
-                        viewModel.startCall(
-                            peerName = conv?.name ?: "Contact",
-                            peerWalletId = conv?.contactWalletId ?: "",
-                            peerAvatar = conv?.avatarUrl,
-                            isVideo = true
-                        )
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.Videocam,
-                            contentDescription = "Appel vidéo",
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(onClick = {
-                        backgroundPickerLauncher.launch("image/*")
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.Image,
-                            contentDescription = "Fond d'écran",
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(onClick = {
-                        onOpenProfile?.invoke(conversationId)
-                    }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "Profil",
-                            tint = Color.White
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = CashPayNavy
-                )
+    // Root Container with Background
+    Box(modifier = Modifier.fillMaxSize().background(CashPayNavyDark)) {
+        // Full Screen Background Image (from albums/gallery)
+        if (chatBackgroundUri != null) {
+            androidx.compose.foundation.Image(
+                painter = coil.compose.rememberAsyncImagePainter(chatBackgroundUri),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                alpha = 0.5f // Sufficiently dimmed for readability
             )
-        },
-        bottomBar = {
-            Column(
-                modifier = Modifier
-                    .background(CashPayNavy)
-                    .navigationBarsPadding()
-            ) {
-                // Bottom Input Bar matching Screenshot 1:
-                // [😄 Emoji] [Message field] [📎 Paperclip Attachment] [🎤/➤ Send]
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 1. Emoji / Stickers Toggle Button
-                    IconButton(
-                        onClick = {
-                            showEmojiStickerPicker = !showEmojiStickerPicker
-                        },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (showEmojiStickerPicker) Icons.Default.Keyboard else Icons.Default.SentimentSatisfiedAlt,
-                            contentDescription = "Émojis & Stickers",
-                            tint = if (showEmojiStickerPicker) OnChatCyan else CashPayGrey,
-                            modifier = Modifier.size(24.dp)
-                        )
+        } else {
+            // Telegram Wallpaper Subtle Background Pattern
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val w = size.width
+                val h = size.height
+                val patternColor = Color(0xFF1A233D).copy(alpha = 0.35f)
+                for (x in 0..4) {
+                    for (y in 0..8) {
+                        val cx = (w / 4) * x
+                        val cy = (h / 8) * y + ((x % 2) * 40f)
+                        drawCircle(patternColor, radius = 6f, center = Offset(cx, cy))
                     }
-
-                    // 2. Main Message Input Field
-                    TextField(
-                        value = inputText,
-                        onValueChange = {
-                            inputText = it
-                            if (it.isNotEmpty()) {
-                                viewModel.sendTyping(conversationId)
-                            }
-                            if (showEmojiStickerPicker) {
-                                showEmojiStickerPicker = false
-                            }
-                        },
-                        placeholder = {
-                            Text("Message", color = CashPayGrey, fontSize = 15.sp)
-                        },
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = CashPayNavySurface,
-                            unfocusedContainerColor = CashPayNavySurface,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            cursorColor = OnChatCyan,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
-                        ),
-                        shape = RoundedCornerShape(22.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp, max = 100.dp),
-                        maxLines = 4
-                    )
-
-                    // 3. Attachment Paperclip Button (Opens Wallet / Fichier / Position / Liste / Contact)
-                    IconButton(
-                        onClick = {
-                            showAttachmentSheet = true
-                        },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.AttachFile,
-                            contentDescription = "Menu Pièces Jointes & Wallet",
-                            tint = CashPayGrey,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(2.dp))
-
-                    // 4. Send or Audio Record Button
-                    Box(
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape)
-                            .background(brush = if (inputText.isNotBlank() || isRecording) OnChatPrimaryGradient else Brush.horizontalGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0))))
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onPress = {
-                                        if (inputText.isBlank()) {
-                                            try {
-                                                val file = java.io.File(context.cacheDir, "voice_note_${System.currentTimeMillis()}.m4a")
-                                                recordingFile = file
-                                                audioRecorder.start(file)
-                                                isRecording = true
-                                            } catch (e: Exception) {
-                                                Toast.makeText(context, "Erreur micro: ${e.message}", Toast.LENGTH_SHORT).show()
-                                            }
-                                            try {
-                                                awaitRelease()
-                                            } finally {
-                                                if (isRecording) {
-                                                    audioRecorder.stop()
-                                                    isRecording = false
-                                                    recordingFile?.let { viewModel.sendAudioMessage(it) }
-                                                    Toast.makeText(context, "Note vocale envoyée", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    },
-                                    onTap = {
-                                        if (inputText.isNotBlank()) {
-                                            viewModel.sendMessage(inputText)
-                                            inputText = ""
-                                            showEmojiStickerPicker = false
-                                        } else {
-                                            Toast.makeText(context, "Maintenez pour enregistrer", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (inputText.isNotBlank()) Icons.Default.Send else if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
-                            contentDescription = if (inputText.isNotBlank()) "Envoyer" else "Enregistrer audio",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-
-                // Expandable Emoji & Sticker Picker Keyboard
-                AnimatedVisibility(
-                    visible = showEmojiStickerPicker,
-                    enter = slideInVertically(initialOffsetY = { it }),
-                    exit = slideOutVertically(targetOffsetY = { it })
-                ) {
-                    EmojiStickerPicker(
-                        onEmojiSelected = { emoji ->
-                            inputText += emoji
-                        },
-                        onStickerSelected = { sticker ->
-                            viewModel.sendMessage("${sticker.emojiRepresentation} ${sticker.title}", type = "sticker")
-                            showEmojiStickerPicker = false
-                        },
-                        onGifSelected = { gifTitle ->
-                            viewModel.sendMessage("🎬 $gifTitle", type = "sticker")
-                            showEmojiStickerPicker = false
-                        },
-                        onBackspace = {
-                            if (inputText.isNotEmpty()) {
-                                inputText = inputText.dropLast(1)
-                            }
-                        }
-                    )
                 }
             }
         }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(CashPayNavyDark)
-                .padding(innerPadding)
-        ) {
-            // Background Image (Gallery or Default)
-            if (chatBackgroundUri != null) {
-                androidx.compose.foundation.Image(
-                    painter = coil.compose.rememberAsyncImagePainter(chatBackgroundUri),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                    alpha = 0.4f
-                )
-            } else {
-                // Telegram Wallpaper Subtle Background Pattern (Blueprints & Doodles overlay)
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val w = size.width
-                    val h = size.height
 
-                    val patternColor = Color(0xFF1A233D).copy(alpha = 0.35f)
-
-                    // Subtle circular doodle accents
-                    for (x in 0..4) {
-                        for (y in 0..8) {
-                            val cx = (w / 4) * x
-                            val cy = (h / 8) * y + ((x % 2) * 40f)
-                            drawCircle(patternColor, radius = 6f, center = Offset(cx, cy))
-                        }
-                    }
-                }
-            }
-
-            if (isSkeletonLoading && messages.isEmpty()) {
-                Column(modifier = Modifier.fillMaxSize()) {
-                    repeat(3) {
-                        SkeletonMessageBubble(isOutgoing = false)
-                        SkeletonMessageBubble(isOutgoing = true)
-                    }
-                }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Date header badge matching Screenshot 1 ("21 septembre")
-                    item {
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.Center
+        Scaffold(
+            containerColor = Color.Transparent,
+            topBar = {
+                TopAppBar(
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onOpenProfile?.invoke(conversationId)
+                                }
                         ) {
-                            Surface(
-                                color = CashPayNavySurface.copy(alpha = 0.75f),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
+                            AvatarBadge(
+                                name = conv?.name ?: "Discussion",
+                                avatarUrl = conv?.avatarUrl,
+                                size = 40.dp,
+                                isGroup = conv?.isGroup ?: false
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
                                 Text(
-                                    text = "21 septembre",
-                                    color = Color.White.copy(alpha = 0.85f),
+                                    text = conv?.name ?: "Discussion",
+                                    color = Color.White,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = when {
+                                        typingUser != null -> "✍️ $typingUser écrit..."
+                                        conv?.isGroup == true -> "Groupe OnChat • ${conv.currency ?: "USD"}"
+                                        else -> "en ligne • CashPay"
+                                    },
+                                    color = if (typingUser != null) Color(0xFF4ECCA3) else OnChatCyan,
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                    fontWeight = if (typingUser != null) FontWeight.Medium else FontWeight.Normal
                                 )
                             }
                         }
+                    },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Retour",
+                                tint = Color.White
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = {
+                            viewModel.startCall(
+                                peerName = conv?.name ?: "Contact",
+                                peerWalletId = conv?.contactWalletId ?: "",
+                                peerAvatar = conv?.avatarUrl,
+                                isVideo = false
+                            )
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Call,
+                                contentDescription = "Appel audio",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = {
+                            viewModel.startCall(
+                                peerName = conv?.name ?: "Contact",
+                                peerWalletId = conv?.contactWalletId ?: "",
+                                peerAvatar = conv?.avatarUrl,
+                                isVideo = true
+                            )
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Videocam,
+                                contentDescription = "Appel vidéo",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = {
+                            backgroundPickerLauncher.launch("image/*")
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Image,
+                                contentDescription = "Changer le fond",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = {
+                            onOpenProfile?.invoke(conversationId)
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "Profil",
+                                tint = Color.White
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = CashPayNavy.copy(alpha = 0.8f)
+                    )
+                )
+            },
+            bottomBar = {
+                Column(
+                    modifier = Modifier
+                        .background(CashPayNavy.copy(alpha = 0.9f))
+                        .navigationBarsPadding()
+                ) {
+                    // Bottom Input Bar matching Screenshot 1:
+                    // [😄 Emoji] [Message field] [📎 Paperclip Attachment] [🎤/➤ Send]
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 1. Emoji / Stickers Toggle Button
+                        IconButton(
+                            onClick = {
+                                showEmojiStickerPicker = !showEmojiStickerPicker
+                            },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (showEmojiStickerPicker) Icons.Default.Keyboard else Icons.Default.SentimentSatisfiedAlt,
+                                contentDescription = "Émojis & Stickers",
+                                tint = if (showEmojiStickerPicker) OnChatCyan else CashPayGrey,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        // 2. Main Message Input Field
+                        TextField(
+                            value = inputText,
+                            onValueChange = {
+                                inputText = it
+                                if (it.isNotEmpty()) {
+                                    viewModel.sendTyping(conversationId)
+                                }
+                                if (showEmojiStickerPicker) {
+                                    showEmojiStickerPicker = false
+                                }
+                            },
+                            placeholder = {
+                                Text("Message", color = CashPayGrey, fontSize = 15.sp)
+                            },
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = CashPayNavySurface.copy(alpha = 0.7f),
+                                unfocusedContainerColor = CashPayNavySurface.copy(alpha = 0.7f),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                cursorColor = OnChatCyan,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent
+                            ),
+                            shape = RoundedCornerShape(22.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 44.dp, max = 100.dp),
+                            maxLines = 4
+                        )
+
+                        // 3. Attachment Paperclip Button (Opens Wallet / Fichier / Position / Liste / Contact)
+                        IconButton(
+                            onClick = {
+                                showAttachmentSheet = true
+                            },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AttachFile,
+                                contentDescription = "Menu Pièces Jointes & Wallet",
+                                tint = CashPayGrey,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(2.dp))
+
+                        // 4. Send or Audio Record Button
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(brush = if (inputText.isNotBlank() || isRecording) OnChatPrimaryGradient else Brush.horizontalGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0))))
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onPress = {
+                                            if (inputText.isBlank()) {
+                                                try {
+                                                    val file = java.io.File(context.cacheDir, "voice_note_${System.currentTimeMillis()}.m4a")
+                                                    recordingFile = file
+                                                    audioRecorder.start(file)
+                                                    isRecording = true
+                                                } catch (e: Exception) {
+                                                    Toast.makeText(context, "Erreur micro: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                }
+                                                try {
+                                                    awaitRelease()
+                                                } finally {
+                                                    if (isRecording) {
+                                                        audioRecorder.stop()
+                                                        isRecording = false
+                                                        recordingFile?.let { viewModel.sendAudioMessage(it) }
+                                                        Toast.makeText(context, "Note vocale envoyée", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        onTap = {
+                                            if (inputText.isNotBlank()) {
+                                                viewModel.sendMessage(inputText)
+                                                inputText = ""
+                                                showEmojiStickerPicker = false
+                                            } else {
+                                                Toast.makeText(context, "Maintenez pour enregistrer", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    )
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (inputText.isNotBlank()) Icons.Default.Send else if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
+                                contentDescription = if (inputText.isNotBlank()) "Envoyer" else "Enregistrer audio",
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
 
-                    items(messages, key = { it.id }) { msg ->
-                        MessageBubbleItem(
-                            message = msg,
-                            onLongPress = {
-                                if (msg.isMine) {
-                                    selectedMessageForAction = msg
+                    // Expandable Emoji & Sticker Picker Keyboard
+                    AnimatedVisibility(
+                        visible = showEmojiStickerPicker,
+                        enter = slideInVertically(initialOffsetY = { it }),
+                        exit = slideOutVertically(targetOffsetY = { it })
+                    ) {
+                        EmojiStickerPicker(
+                            onEmojiSelected = { emoji ->
+                                inputText += emoji
+                            },
+                            onStickerSelected = { sticker ->
+                                viewModel.sendMessage("${sticker.emojiRepresentation} ${sticker.title}", type = "sticker")
+                                showEmojiStickerPicker = false
+                            },
+                            onGifSelected = { gifTitle ->
+                                viewModel.sendMessage("🎬 $gifTitle", type = "sticker")
+                                showEmojiStickerPicker = false
+                            },
+                            onBackspace = {
+                                if (inputText.isNotEmpty()) {
+                                    inputText = inputText.dropLast(1)
                                 }
                             }
                         )
+                    }
+                }
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                if (isSkeletonLoading && messages.isEmpty()) {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        repeat(3) {
+                            SkeletonMessageBubble(isOutgoing = false)
+                            SkeletonMessageBubble(isOutgoing = true)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        // Date header badge matching Screenshot 1 ("21 septembre")
+                        item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Surface(
+                                    color = CashPayNavySurface.copy(alpha = 0.75f),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text(
+                                        text = "21 septembre",
+                                        color = Color.White.copy(alpha = 0.85f),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        items(messages, key = { it.id }) { msg ->
+                            MessageBubbleItem(
+                                message = msg,
+                                myAvatar = session?.avatarUrl,
+                                onLongPress = {
+                                    if (msg.isMine) {
+                                        selectedMessageForAction = msg
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -499,8 +501,58 @@ fun ChatDetailScreen(
             onSendLocation = { title, subtitle, lat, lng ->
                 viewModel.sendMessage("$title • $subtitle", type = "location")
             },
-            onSendFile = { fileName, fileType, sizeStr ->
-                viewModel.sendMessage("📄 $fileName ($sizeStr)", type = if (fileType == "image") "image" else "doc")
+            onSendFile = { fileName, fileType, sizeStr, uri ->
+                if (uri != null) {
+                    when (fileType) {
+                        "video" -> {
+                            viewModel.uploadVideo(uri) { success, error ->
+                                if (success) {
+                                    Toast.makeText(context, "Vidéo envoyée !", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Erreur vidéo: $error", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                        "image" -> {
+                            coroutineScope.launch {
+                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                if (bytes != null) {
+                                    val url = viewModel.uploadMediaBytes(bytes, fileName, "image/jpeg")
+                                    if (url != null) {
+                                        viewModel.sendMessage("🖼️ Photo", type = "image", fileUrl = url, fileName = fileName)
+                                    } else {
+                                        Toast.makeText(context, "Erreur upload image", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                        "audio" -> {
+                            coroutineScope.launch {
+                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                if (bytes != null) {
+                                    val url = viewModel.uploadMediaBytes(bytes, fileName, "audio/mp4")
+                                    if (url != null) {
+                                        viewModel.sendMessage("🎤 Note vocale", type = "audio", fileUrl = url, fileName = fileName)
+                                    }
+                                }
+                            }
+                        }
+                        else -> {
+                            // Doc
+                            coroutineScope.launch {
+                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                if (bytes != null) {
+                                    val url = viewModel.uploadMediaBytes(bytes, fileName, "application/pdf")
+                                    if (url != null) {
+                                        viewModel.sendMessage("📄 $fileName ($sizeStr)", type = "doc", fileUrl = url, fileName = fileName)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    viewModel.sendMessage("📄 $fileName ($sizeStr)", type = if (fileType == "image") "image" else "doc")
+                }
             },
             onSendContact = { name, phone, walletId, avatar ->
                 val avatarPart = if (!avatar.isNullOrBlank()) " • Avatar: $avatar" else ""
@@ -1517,6 +1569,7 @@ fun ChatDetailScreen(
 @Composable
 fun MessageBubbleItem(
     message: Message,
+    myAvatar: String?,
     onLongPress: () -> Unit
 ) {
     val timeFormatted = remember(message.timestamp) {
@@ -1541,14 +1594,14 @@ fun MessageBubbleItem(
             AvatarBadge(
                 name = message.senderName,
                 avatarUrl = message.senderAvatar,
-                size = 32.dp,
+                size = 34.dp,
                 isGroup = false
             )
             Spacer(modifier = Modifier.width(8.dp))
         }
 
         Box(
-            modifier = Modifier.widthIn(max = 280.dp),
+            modifier = Modifier.widthIn(max = 260.dp),
             contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart
         ) {
             when {
@@ -1556,7 +1609,7 @@ fun MessageBubbleItem(
                     // Dedicated In-Chat Transfer Card (CashPay All)
                     Card(
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = CashPayNavySurface),
+                        colors = CardDefaults.cardColors(containerColor = CashPayNavySurface.copy(alpha = 0.9f)),
                         border = CardDefaults.outlinedCardBorder().copy(
                             brush = Brush.horizontalGradient(listOf(OnChatCyan, OnChatViolet))
                         ),
@@ -1679,7 +1732,7 @@ fun MessageBubbleItem(
                             )
                             .then(
                                 if (message.isMine) Modifier.background(brush = OnChatBubbleGradient)
-                                else Modifier.background(CashPayReceivedBubbleLight)
+                                else Modifier.background(Color(0xFFE8F0FE)) // Light Blue for incoming
                             )
                             .padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
@@ -1764,9 +1817,9 @@ fun MessageBubbleItem(
             // User Avatar on the Right
             Spacer(modifier = Modifier.width(8.dp))
             AvatarBadge(
-                name = message.senderName,
-                avatarUrl = message.senderAvatar,
-                size = 32.dp,
+                name = "Moi",
+                avatarUrl = myAvatar,
+                size = 34.dp,
                 isGroup = false
             )
         }

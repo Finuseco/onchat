@@ -55,7 +55,13 @@ data class ApiCallDto(
     @Json(name = "status") val status: String? = "COMPLETED",
     @Json(name = "duration_seconds") val durationSeconds: Int = 0,
     @Json(name = "started_at") val startedAt: String? = null,
-    @Json(name = "ended_at") val endedAt: String? = null
+    @Json(name = "ended_at") val endedAt: String? = null,
+    @Json(name = "caller_wallet_id") val callerWalletId: String? = null,
+    @Json(name = "caller_name") val callerName: String? = null,
+    @Json(name = "caller_photo") val callerPhoto: String? = null,
+    @Json(name = "receiver_wallet_id") val receiverWalletId: String? = null,
+    @Json(name = "receiver_name") val receiverName: String? = null,
+    @Json(name = "receiver_photo") val receiverPhoto: String? = null
 )
 
 @JsonClass(generateAdapter = true)

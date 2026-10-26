@@ -64,8 +64,29 @@ data class CallSessionState(
 
 class OnChatViewModel(application: Application) : AndroidViewModel(application) {
     val repository = OnChatRepository(application)
+    val meetingsRepository = MeetingsRepository(application)
     val wsManager = OnChatWebSocketManager.getInstance()
     private val voiceCallManager = RealVoiceCallManager(application)
+
+    // --- FINUSECO SARL / CashPay All Meetings & Calls State ---
+    private val _activeMeeting = MutableStateFlow<ActiveMeetingSession?>(null)
+    val activeMeeting: StateFlow<ActiveMeetingSession?> = _activeMeeting.asStateFlow()
+
+    private val _recentMeetings = MutableStateFlow<List<MeetingItemDto>>(emptyList())
+    val recentMeetings: StateFlow<List<MeetingItemDto>> = _recentMeetings.asStateFlow()
+
+    private val _isMeetingsLoading = MutableStateFlow(false)
+    val isMeetingsLoading: StateFlow<Boolean> = _isMeetingsLoading.asStateFlow()
+
+    private val _activeMeetingBilling = MutableStateFlow<MeetingBillingDto?>(null)
+    val activeMeetingBilling: StateFlow<MeetingBillingDto?> = _activeMeetingBilling.asStateFlow()
+
+    private val _apiCallsHistory = MutableStateFlow<List<ApiCallDto>>(emptyList())
+    val apiCallsHistory: StateFlow<List<ApiCallDto>> = _apiCallsHistory.asStateFlow()
+
+
+    private val _lastMeetingApiError = MutableStateFlow<String?>(null)
+    val lastMeetingApiError: StateFlow<String?> = _lastMeetingApiError.asStateFlow()
 
     // Real-Time WebSocket State (wss://glob.cashpay-all.com/ws)
     val wsStatus: StateFlow<WsConnectionStatus> = wsManager.connectionStatus
@@ -1382,11 +1403,24 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         _activeConversationId.value = null
     }
 
-    fun sendMessage(text: String, type: String = "text", metadata: Map<String, String>? = null) {
+    fun sendMessage(
+        text: String,
+        type: String = "text",
+        metadata: Map<String, String>? = null,
+        fileUrl: String? = null,
+        fileName: String? = null
+    ) {
         val convId = _activeConversationId.value ?: return
         if (text.isBlank()) return
         viewModelScope.launch {
-            repository.sendMessage(convId, text.trim(), type = type, metadata = metadata)
+            repository.sendMessage(
+                conversationId = convId,
+                content = text.trim(),
+                type = type,
+                metadata = metadata,
+                fileUrl = fileUrl,
+                fileName = fileName
+            )
         }
     }
 
@@ -2064,6 +2098,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         fetchFeeds()
+        fetchRecentMeetings()
+        fetchCallsHistoryApi()
     }
 
     fun fetchFeeds() {
@@ -2171,4 +2207,271 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
+
+    // =========================================================================
+    // FINUSECO SARL / CashPay All / OnChat Meetings API (Cahier des charges)
+    // =========================================================================
+
+    fun fetchRecentMeetings(limit: Int = 20) {
+        viewModelScope.launch {
+            _isMeetingsLoading.value = true
+            meetingsRepository.getMeetingsList(limit).onSuccess { list ->
+                _recentMeetings.value = list
+            }.onFailure { err ->
+                _lastMeetingApiError.value = err.message
+            }
+            _isMeetingsLoading.value = false
+        }
+    }
+
+    fun createMeeting(
+        topic: String,
+        type: String = "video",
+        scheduledAt: String? = null,
+        durationMin: Int = 60,
+        priceAmount: Double = 0.0,
+        priceCurrency: String = "USD",
+        autoJoin: Boolean = true,
+        onSuccess: ((CreateMeetingResponse) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            _isMeetingsLoading.value = true
+            meetingsRepository.createMeeting(
+                topic = topic,
+                type = type,
+                scheduledAt = scheduledAt,
+                durationMin = durationMin,
+                priceAmount = priceAmount,
+                priceCurrency = priceCurrency
+            ).onSuccess { response ->
+                _successMessage.value = "Réunion créée avec succès ! Code: ${response.meetCode}"
+                fetchRecentMeetings()
+                if (autoJoin && !response.meetCode.isNullOrBlank()) {
+                    joinMeeting(response.meetCode)
+                }
+                onSuccess?.invoke(response)
+            }.onFailure { err ->
+                _errorMessage.value = err.message ?: "Impossible de créer la réunion"
+                _lastMeetingApiError.value = err.message
+            }
+            _isMeetingsLoading.value = false
+        }
+    }
+
+    fun joinMeeting(
+        meetCode: String,
+        onComplete: ((Boolean) -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            _isMeetingsLoading.value = true
+            meetingsRepository.joinMeeting(meetCode).onSuccess { joinRes ->
+                val code = joinRes.meetCode ?: meetCode
+                // Charger les participants
+                val participantsRes = meetingsRepository.getMeetingParticipants(code).getOrNull()
+                val participants = participantsRes?.participants ?: emptyList()
+                val isHost = participants.any { it.isHost && (it.userId == (ApiClient.currentUserId ?: 101L)) }
+
+                val session = ActiveMeetingSession(
+                    meetCode = code,
+                    topic = joinRes.topic ?: "Réunion OnChat",
+                    type = joinRes.type ?: "video",
+                    joinUrl = joinRes.joinUrl ?: "https://app.cashpay-all.com/feedback/meet/$code",
+                    isHost = isHost,
+                    status = "active",
+                    canSpeak = isHost || participants.firstOrNull { it.userId == (ApiClient.currentUserId ?: 999L) }?.canSpeak ?: true,
+                    isHandRaised = false,
+                    isMicMuted = false,
+                    isCameraOn = joinRes.type != "audio",
+                    isCameraFront = true,
+                    participants = participants,
+                    billing = null
+                )
+                _activeMeeting.value = session
+                fetchMeetingBilling(code)
+                _successMessage.value = "Connecté à la réunion $code"
+                onComplete?.invoke(true)
+            }.onFailure { err ->
+                _errorMessage.value = err.message ?: "Impossible de rejoindre la réunion"
+                _lastMeetingApiError.value = err.message
+                onComplete?.invoke(false)
+            }
+            _isMeetingsLoading.value = false
+        }
+    }
+
+    fun leaveMeeting() {
+        val current = _activeMeeting.value ?: return
+        viewModelScope.launch {
+            meetingsRepository.leaveMeeting(current.meetCode)
+            _activeMeeting.value = null
+            _successMessage.value = "Vous avez quitté la réunion"
+            fetchRecentMeetings()
+        }
+    }
+
+    fun endMeeting() {
+        val current = _activeMeeting.value ?: return
+        if (!current.isHost) {
+            _errorMessage.value = "Seul l'hôte peut terminer la réunion (403)"
+            return
+        }
+        viewModelScope.launch {
+            meetingsRepository.endMeeting(current.meetCode).onSuccess {
+                _activeMeeting.value = null
+                _successMessage.value = "La réunion a été terminée avec succès"
+                fetchRecentMeetings()
+            }.onFailure { err ->
+                _errorMessage.value = err.message ?: "Erreur lors de la fermeture de la réunion"
+            }
+        }
+    }
+
+    fun toggleMeetingRaiseHand() {
+        val current = _activeMeeting.value ?: return
+        val newRaised = !current.isHandRaised
+        viewModelScope.launch {
+            meetingsRepository.raiseHand(current.meetCode, newRaised).onSuccess {
+                _activeMeeting.value = current.copy(isHandRaised = newRaised)
+                refreshMeetingParticipants()
+                _successMessage.value = if (newRaised) "Main levée pour demander la parole" else "Main baissée"
+            }
+        }
+    }
+
+    fun grantOrRevokeSpeech(targetUserId: Long, canSpeak: Boolean) {
+        val current = _activeMeeting.value ?: return
+        if (!current.isHost) {
+            _errorMessage.value = "Seul l'hôte peut accorder la parole (403)"
+            return
+        }
+        viewModelScope.launch {
+            meetingsRepository.grantSpeech(current.meetCode, targetUserId, canSpeak).onSuccess { res ->
+                refreshMeetingParticipants()
+                _successMessage.value = if (canSpeak) "Droit de parole accordé (Rôle: ${res.role ?: "speaker"})" else "Droit de parole retiré"
+            }.onFailure { err ->
+                _errorMessage.value = err.message ?: "Erreur lors de la modification du droit de parole"
+            }
+        }
+    }
+
+    fun refreshMeetingParticipants() {
+        val current = _activeMeeting.value ?: return
+        viewModelScope.launch {
+            meetingsRepository.getMeetingParticipants(current.meetCode).onSuccess { res ->
+                val myUserId = ApiClient.currentUserId ?: 101L
+                val me = res.participants.firstOrNull { it.userId == myUserId }
+                _activeMeeting.value = current.copy(
+                    participants = res.participants,
+                    canSpeak = if (current.isHost) true else (me?.canSpeak ?: current.canSpeak),
+                    isHandRaised = me?.raiseHand ?: current.isHandRaised
+                )
+            }
+        }
+    }
+
+    fun fetchMeetingBilling(meetCode: String) {
+        viewModelScope.launch {
+            meetingsRepository.getMeetingBilling(meetCode).onSuccess { res ->
+                _activeMeetingBilling.value = res.billing
+                _activeMeeting.value = _activeMeeting.value?.copy(billing = res.billing)
+            }
+        }
+    }
+
+    fun updateMeetingBilling(priceAmount: Double, priceCurrency: String) {
+        val current = _activeMeeting.value ?: return
+        if (!current.isHost) {
+            _errorMessage.value = "Seul l'hôte peut modifier la facturation (403)"
+            return
+        }
+        viewModelScope.launch {
+            meetingsRepository.updateMeetingBilling(current.meetCode, priceAmount, priceCurrency).onSuccess { res ->
+                val updated = MeetingBillingDto(
+                    priceAmount = res.priceAmount ?: priceAmount,
+                    priceCurrency = res.priceCurrency ?: priceCurrency,
+                    isPaid = priceAmount > 0,
+                    hostUserId = ApiClient.currentUserId ?: 101L
+                )
+                _activeMeetingBilling.value = updated
+                _activeMeeting.value = current.copy(billing = updated)
+                _successMessage.value = "Facturation mise à jour : $priceAmount $priceCurrency"
+            }.onFailure { err ->
+                _errorMessage.value = err.message ?: "Erreur mise à jour facturation"
+            }
+        }
+    }
+
+    fun toggleMeetingMic() {
+        val current = _activeMeeting.value ?: return
+        if (!current.canSpeak && current.isMicMuted) {
+            _errorMessage.value = "Droit de parole non accordé. Levez la main pour demander la parole."
+            return
+        }
+        val newMute = !current.isMicMuted
+        voiceCallManager.setMute(newMute)
+        _activeMeeting.value = current.copy(isMicMuted = newMute)
+    }
+
+    fun toggleMeetingCamera() {
+        val current = _activeMeeting.value ?: return
+        _activeMeeting.value = current.copy(isCameraOn = !current.isCameraOn)
+    }
+
+    fun toggleMeetingCameraFront() {
+        val current = _activeMeeting.value ?: return
+        _activeMeeting.value = current.copy(isCameraFront = !current.isCameraFront)
+    }
+
+    // =========================================================================
+    // Calls API (Cahier des charges section 4)
+    // =========================================================================
+
+    fun initiateCallApi(receiverWalletId: String, isVideo: Boolean) {
+        val myWallet = currentSession.value?.walletId.orEmpty().ifBlank { "CD0100000001" }
+        viewModelScope.launch {
+            meetingsRepository.initiateCall(
+                callerWalletId = myWallet,
+                receiverWalletId = receiverWalletId,
+                isVideo = isVideo
+            ).onSuccess { callDto ->
+                fetchCallsHistoryApi()
+                startCall(
+                    peerName = callDto.receiverName ?: "Contact ($receiverWalletId)",
+                    peerWalletId = receiverWalletId,
+                    isVideo = isVideo,
+                    autoConnect = false
+                )
+            }.onFailure { err ->
+                _errorMessage.value = err.message ?: "Impossible d'initier l'appel"
+            }
+        }
+    }
+
+    fun respondCallApi(callId: String, status: String) {
+        val myWallet = currentSession.value?.walletId.orEmpty().ifBlank { "CD0100000001" }
+        viewModelScope.launch {
+            meetingsRepository.respondCall(callId, myWallet, status).onSuccess {
+                fetchCallsHistoryApi()
+            }
+        }
+    }
+
+    fun endCallApi(callId: String, durationSec: Int = 0) {
+        val myWallet = currentSession.value?.walletId.orEmpty().ifBlank { "CD0100000001" }
+        viewModelScope.launch {
+            meetingsRepository.endCall(callId, myWallet, durationSec).onSuccess {
+                fetchCallsHistoryApi()
+            }
+        }
+    }
+
+    fun fetchCallsHistoryApi() {
+        val myWallet = currentSession.value?.walletId.orEmpty().ifBlank { "CD0100000001" }
+        viewModelScope.launch {
+            meetingsRepository.getCallsHistory(myWallet).onSuccess { list ->
+                _apiCallsHistory.value = list
+            }
+        }
+    }
 }
+

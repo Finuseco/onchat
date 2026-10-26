@@ -31,6 +31,7 @@ import com.example.ui.screens.status.StatusScreen
 import com.example.ui.screens.calls.CallsScreen
 import com.example.ui.screens.calls.ActiveCallScreen
 import com.example.ui.screens.calls.IncomingCallOverlay
+import com.example.ui.screens.calls.MeetingRoomScreen
 import com.example.ui.screens.contacts.ContactsCheckScreen
 import com.example.ui.screens.wallet.TransactionListScreen
 import com.example.ui.screens.settings.SettingsScreen
@@ -51,6 +52,7 @@ class MainActivity : ComponentActivity() {
                 val loginStep by viewModel.loginStep.collectAsState()
                 val isSessionChecking by viewModel.isSessionChecking.collectAsState()
                 val activeCall by viewModel.activeCall.collectAsState()
+                val activeMeeting by viewModel.activeMeeting.collectAsState()
                 val incomingCall by viewModel.incomingCall.collectAsState()
                 val activeConversationId by viewModel.activeConversationId.collectAsState()
 
@@ -119,6 +121,13 @@ class MainActivity : ComponentActivity() {
                         ActiveCallScreen(
                             callState = activeCall!!,
                             viewModel = viewModel
+                        )
+                    }
+                    activeMeeting != null -> {
+                        MeetingRoomScreen(
+                            session = activeMeeting!!,
+                            viewModel = viewModel,
+                            onClose = { viewModel.leaveMeeting() }
                         )
                     }
                     else -> {

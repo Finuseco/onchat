@@ -1515,6 +1515,9 @@ class OnChatRepository(private val context: Context) {
             if (directResp.isSuccessful) {
                 val returnedMsg = directResp.body()?.message
                 val finalId = returnedMsg?.id?.toString() ?: messageId
+                if (finalId != messageId) {
+                    messageDao.deleteMessage(messageId)
+                }
                 messageDao.insertMessage(entity.copy(id = finalId, status = "delivered"))
             } else {
                 messageDao.insertMessage(entity.copy(status = "sent"))
