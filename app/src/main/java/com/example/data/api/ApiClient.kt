@@ -23,6 +23,13 @@ object ApiClient {
 
     private val cookieStore = ConcurrentHashMap<String, MutableList<Cookie>>()
 
+    fun clearSession() {
+        authToken = null
+        activeWalletId = ""
+        currentUserId = null
+        cookieStore.clear()
+    }
+
     private val cookieJar = object : CookieJar {
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
             val list = cookieStore.getOrPut(url.host) { mutableListOf() }
@@ -61,7 +68,10 @@ object ApiClient {
     }
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+        level = if (com.example.BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BASIC else HttpLoggingInterceptor.Level.NONE
+        redactHeader("Authorization")
+        redactHeader("Cookie")
+        redactHeader("Set-Cookie")
     }
 
     private val authInterceptor = okhttp3.Interceptor { chain ->

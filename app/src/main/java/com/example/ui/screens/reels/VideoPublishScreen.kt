@@ -1,6 +1,9 @@
 package com.example.ui.screens.reels
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +34,8 @@ fun VideoPublishScreen(
     onSuccess: () -> Unit
 ) {
     val context = LocalContext.current
+    var videoUri by remember { mutableStateOf<Uri?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { videoUri = it }
     var caption by remember { mutableStateOf("") }
     var privacy by remember { mutableStateOf("Public") }
     var allowComments by remember { mutableStateOf(true) }
@@ -66,11 +71,14 @@ fun VideoPublishScreen(
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             Column {
+                OutlinedButton(onClick = { picker.launch("video/*") }, enabled = !isPublishing) {
+                    Text(if (videoUri == null) "Choisir une vidéo" else "Changer de vidéo")
+                }
                 OutlinedTextField(
                     value = caption,
                     onValueChange = { caption = it },
-                    label = { Text("Légende de la vidéo", color = CashPayGrey) },
-                    placeholder = { Text("Décrivez votre vidéo, ajoutez des #hashtags...", color = CashPayGrey.copy(alpha = 0.5f)) },
+                    label = { Text("Texte sur la vidéo", color = CashPayGrey) },
+                    placeholder = { Text("Texte incrusté dans la vidéo...", color = CashPayGrey.copy(alpha = 0.5f)) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
                         unfocusedTextColor = Color.White,
@@ -137,11 +145,12 @@ fun VideoPublishScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.Comment, contentDescription = null, tint = OnChatVioletLight)
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("Autoriser les commentaires", color = Color.White, fontSize = 14.sp)
+                                Text("Commentaires (bientôt disponible)", color = Color.White, fontSize = 14.sp)
                             }
                             Switch(
                                 checked = allowComments,
                                 onCheckedChange = { allowComments = it },
+                                enabled = false,
                                 colors = SwitchDefaults.colors(checkedThumbColor = OnChatCyan)
                             )
                         }
@@ -156,11 +165,12 @@ fun VideoPublishScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.MusicNote, contentDescription = null, tint = CashPayGold)
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("Autoriser l'utilisation du son", color = Color.White, fontSize = 14.sp)
+                                Text("Réutilisation du son (bientôt disponible)", color = Color.White, fontSize = 14.sp)
                             }
                             Switch(
                                 checked = allowDuet,
                                 onCheckedChange = { allowDuet = it },
+                                enabled = false,
                                 colors = SwitchDefaults.colors(checkedThumbColor = OnChatCyan)
                             )
                         }
@@ -171,12 +181,21 @@ fun VideoPublishScreen(
             // Publish Button
             Button(
                 onClick = {
-                    isPublishing = true
-                    viewModel.fetchVideosFeed()
-                    Toast.makeText(context, "Vidéo publiée avec succès sur OnChat ! 🚀", Toast.LENGTH_SHORT).show()
-                    onSuccess()
+                    videoUri?.let { uri ->
+                        isPublishing = true
+                        viewModel.uploadVideo(uri, caption) { success, error ->
+                            isPublishing = false
+                            if (success) {
+                                viewModel.fetchVideosFeed()
+                                Toast.makeText(context, "Vidéo publiée", Toast.LENGTH_SHORT).show()
+                                onSuccess()
+                            } else {
+                                Toast.makeText(context, error ?: "Échec de la publication", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
                 },
-                enabled = !isPublishing,
+                enabled = !isPublishing && videoUri != null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),

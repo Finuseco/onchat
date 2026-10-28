@@ -18,6 +18,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 
 enum class LoginStep {
@@ -312,6 +314,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             wsManager.incomingMessages.collect { pair ->
                 repository.insertWebSocketMessage(pair.first, pair.second)
+                if (pair.second.senderId == currentSession.value?.userId) return@collect
+                if (_activeConversationId.value == pair.first) wsManager.sendReadReceipt(pair.first)
                 
                 // Play immediate incoming notification sound
                 RingtoneHelper.playNotificationSound(getApplication())
@@ -373,6 +377,13 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             wsManager.callSignalingEvents.collect { envelope ->
                 when (envelope.event) {
+                    "chat.message.read", "chat.read" -> {
+                        val conversationId = envelope.resolvedConversationId
+                        val readerId = envelope.resolvedUserId
+                        if (conversationId != null && readerId != null && readerId != currentSession.value?.userId) {
+                            repository.markOutgoingMessagesAsRead(conversationId)
+                        }
+                    }
                     "call.accepted", "call.answer" -> {
                         _activeCall.value?.let { current ->
                             _activeCall.value = current.copy(isConnected = true)
@@ -961,31 +972,32 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun uploadVideo(uri: Uri, onComplete: (Boolean, String?) -> Unit) {
+    fun uploadVideo(uri: Uri, caption: String = "", onComplete: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             _isUploading.value = true
             _uploadProgress.value = 0.05f
+            var exported: java.io.File? = null
             try {
                 val context = getApplication<Application>()
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                val uploadUri = if (caption.isBlank()) uri else {
+                    val duration = com.example.media.VideoExporter.durationMs(context, uri)
+                    val output = com.example.media.VideoExporter.export(context, uri, duration,
+                        com.example.media.VideoExporter.Edits(0f, 1f, 1f, 1f, false, "Normal",
+                            listOf(com.example.media.VideoExporter.Label(caption, android.graphics.Color.WHITE, 0x99000000.toInt(), 0f, -0.8f))))
+                    exported = output
+                    Uri.fromFile(output)
+                }
+                val bytes = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uploadUri)?.use { it.readBytes() } }
                 if (bytes == null) {
                     onComplete(false, "Impossible de lire le fichier")
                     return@launch
                 }
                 
-                // Real-time progress simulation (until we have a counting request body)
-                launch {
-                    var p = 0.1f
-                    while (p < 0.85f && _isUploading.value) {
-                        delay(600)
-                        p += 0.05f
-                        _uploadProgress.value = p
-                    }
-                }
-
-                val fileName = "video_${System.currentTimeMillis()}.mp4"
+                val mimeType = context.contentResolver.getType(uploadUri) ?: "video/mp4"
+                val extension = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "mp4"
+                val fileName = "video_${System.currentTimeMillis()}.$extension"
                 val currentUserId = currentSession.value?.userId
-                val result = repository.uploadVideoGeneral(bytes, fileName, "video/mp4", publisherId = currentUserId)
+                val result = repository.uploadVideoGeneral(bytes, fileName, mimeType, publisherId = currentUserId)
                 
                 if (!result.isNullOrBlank()) {
                     _uploadProgress.value = 1.0f
@@ -996,6 +1008,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             } catch (e: Exception) {
                 onComplete(false, e.message)
             } finally {
+                exported?.delete()
                 _isUploading.value = false
             }
         }
@@ -1024,6 +1037,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         onComplete: (() -> Unit)? = null
     ) {
         viewModelScope.launch {
+            try {
             targetConversationIds.forEach { targetConvId ->
                 repository.sendMessage(
                     conversationId = targetConvId,
@@ -1034,6 +1048,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
             onComplete?.invoke()
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _errorMessage.value = e.message ?: "Échec du transfert du message" }
         }
     }
 
@@ -1432,14 +1448,15 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         val convId = _activeConversationId.value ?: return
         if (text.isBlank()) return
         viewModelScope.launch {
-            repository.sendMessage(
+            try { repository.sendMessage(
                 conversationId = convId,
                 content = text.trim(),
                 type = type,
                 metadata = metadata,
                 fileUrl = fileUrl,
                 fileName = fileName
-            )
+            ) } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _errorMessage.value = e.message ?: "Échec de l'envoi" }
         }
     }
 

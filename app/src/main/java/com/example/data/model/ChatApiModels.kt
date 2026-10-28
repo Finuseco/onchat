@@ -126,7 +126,10 @@ data class DeleteConversationResponse(
 @JsonClass(generateAdapter = true)
 data class SendMessageRequest(
     @Json(name = "content") val content: String,
-    @Json(name = "type") val type: String = "text"
+    @Json(name = "type") val type: String = "text",
+    @Json(name = "metadata") val metadata: Map<String, String>? = null,
+    @Json(name = "fileUrl") val fileUrl: String? = null,
+    @Json(name = "fileName") val fileName: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -468,7 +471,7 @@ data class WsEventEnvelope(
         get() = conversationId ?: conversation_id ?: (data?.get("conversationId")?.toString()) ?: (data?.get("conversation_id")?.toString())
 
     val resolvedUserId: Long?
-        get() = userId ?: user_id ?: (data?.get("userId")?.toString()?.toLongOrNull())
+        get() = userId ?: user_id ?: (data?.get("userId") as? Number)?.toLong() ?: data?.get("userId")?.toString()?.toLongOrNull()
 
     val resolvedWalletId: String?
         get() = walletId ?: wallet_id ?: (data?.get("walletId")?.toString())

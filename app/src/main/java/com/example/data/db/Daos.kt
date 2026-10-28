@@ -65,6 +65,9 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content, isEdited = 1 WHERE id = :messageId")
     suspend fun updateMessageContent(messageId: String, content: String)
 
+    @Query("UPDATE messages SET status = 'read' WHERE conversationId = :conversationId AND isMine = 1 AND status NOT IN ('failed', 'sending')")
+    suspend fun markOutgoingMessagesAsRead(conversationId: String)
+
     @Query("UPDATE messages SET status = 'READ' WHERE id = :messageId")
     suspend fun markMessageRead(messageId: String)
 

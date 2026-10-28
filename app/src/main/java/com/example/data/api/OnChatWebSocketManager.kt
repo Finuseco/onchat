@@ -62,7 +62,7 @@ class OnChatWebSocketManager private constructor() {
     private val isConnecting = AtomicBoolean(false)
     private var shouldReconnect = true
     private var reconnectAttempt = 0
-    private var currentUrlIndex = 0
+    private var reconnectJob: Job? = null
     private var heartbeatJob: Job? = null
 
     // State flows
@@ -104,16 +104,12 @@ class OnChatWebSocketManager private constructor() {
 
         val token = ApiClient.authToken ?: SessionTokenStore.getToken()
         val walletId = ApiClient.activeWalletId.ifBlank { SessionTokenStore.getWalletId() }
-        val effectiveToken = if (!token.isNullOrBlank()) token else walletId
-
-        isConnecting.set(true)
+        if (token.isNullOrBlank()) return
+        val effectiveToken = token
+        if (!isConnecting.compareAndSet(false, true)) return
         _connectionStatus.value = WsConnectionStatus.CONNECTING
         shouldReconnect = true
-
-        val urls = listOf(WS_URL_GLOB_PRIMARY, WS_URL_GLOB_REALTIME, WS_URL_GLOB_ROOT)
-        val targetBaseUrl = urls[currentUrlIndex % urls.size]
-        val sep = if (targetBaseUrl.contains("?")) "&" else "?"
-        val targetUrl = "$targetBaseUrl${sep}walletId=$walletId&userId=${ApiClient.currentUserId ?: 1}${if (!token.isNullOrBlank()) "&token=$token" else ""}"
+        val targetUrl = com.example.BuildConfig.ONCHAT_WS_URL
 
         val requestBuilder = Request.Builder()
             .url(targetUrl)
@@ -126,23 +122,13 @@ class OnChatWebSocketManager private constructor() {
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connected successfully to $targetUrl")
+                if (webSocket !== ws) return
+                Log.d(TAG, "WebSocket connected")
                 isConnecting.set(false)
                 val wasReconnecting = reconnectAttempt > 0
                 reconnectAttempt = 0
                 _connectionStatus.value = WsConnectionStatus.CONNECTED
                 
-                // Register identity and subscribe to real-time events
-                try {
-                    val regJson = """{"event":"register","type":"register","token":"$effectiveToken","walletId":"$walletId","userId":${ApiClient.currentUserId ?: 1}}"""
-                    ws.send(regJson)
-                    ws.send("""{"type":"authenticate","token":"$effectiveToken","walletId":"$walletId","userId":${ApiClient.currentUserId ?: 1}}""")
-                    if (walletId.isNotBlank()) {
-                        ws.send("""{"event":"subscribe","channel":"user_$walletId"}""")
-                        ws.send("""{"event":"join","room":"$walletId"}""")
-                    }
-                } catch (_: Exception) {}
-
                 startHeartbeat()
                 if (wasReconnecting) {
                     onReconnected?.invoke()
@@ -150,15 +136,18 @@ class OnChatWebSocketManager private constructor() {
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
+                if (webSocket !== ws) return
                 handleIncomingMessage(text)
             }
 
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                if (webSocket !== ws) return
                 Log.d(TAG, "WebSocket closing: $code / $reason")
                 ws.close(1000, null)
             }
 
             override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                if (webSocket !== ws) return
                 Log.d(TAG, "WebSocket closed: $code / $reason")
                 isConnecting.set(false)
                 _connectionStatus.value = WsConnectionStatus.DISCONNECTED
@@ -167,11 +156,11 @@ class OnChatWebSocketManager private constructor() {
             }
 
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.w(TAG, "WebSocket failure on $targetUrl: ${t.message}")
+                if (webSocket !== ws) return
+                Log.w(TAG, "WebSocket connection failed")
                 isConnecting.set(false)
                 _connectionStatus.value = WsConnectionStatus.DISCONNECTED
                 stopHeartbeat()
-                currentUrlIndex++
                 scheduleReconnect()
             }
         })
@@ -214,7 +203,8 @@ class OnChatWebSocketManager private constructor() {
             else -> 15000L
         }
 
-        coroutineScope.launch {
+        reconnectJob?.cancel()
+        reconnectJob = coroutineScope.launch {
             delay(delayMillis)
             if (shouldReconnect && _connectionStatus.value != WsConnectionStatus.CONNECTED) {
                 Log.d(TAG, "Attempting reconnect (#$reconnectAttempt)...")
@@ -258,7 +248,9 @@ class OnChatWebSocketManager private constructor() {
                         ?: rawJsonObj?.optString("conversationId")
                         ?: rawJsonObj?.optString("conversation_id")
                         ?: rawJsonObj?.optJSONObject("data")?.optString("conversationId")
-                    var msg = envelope?.message
+                    var msg = envelope?.message ?: dataMap?.get("message")?.let { value ->
+                        try { moshi.adapter(ApiMessage::class.java).fromJsonValue(value) } catch (_: Exception) { null }
+                    }
                     if (msg == null) {
                         val d = dataMap ?: rawJsonObj?.optJSONObject("data")?.let { jo ->
                             val map = mutableMapOf<String, Any?>()
@@ -434,7 +426,8 @@ class OnChatWebSocketManager private constructor() {
     fun sendTyping(conversationId: String) {
         if (_connectionStatus.value != WsConnectionStatus.CONNECTED) return
         try {
-            val json = typingAdapter.toJson(WsOutgoingTyping(conversationId = conversationId))
+            val json = org.json.JSONObject().put("event", "chat.typing").put("data",
+                org.json.JSONObject().put("conversationId", conversationId).put("typing", true)).toString()
             webSocket?.send(json)
         } catch (e: Exception) {
             Log.w(TAG, "Error sending typing: ${e.message}")
@@ -444,7 +437,8 @@ class OnChatWebSocketManager private constructor() {
     fun sendReadReceipt(conversationId: String) {
         if (_connectionStatus.value != WsConnectionStatus.CONNECTED) return
         try {
-            val json = readAdapter.toJson(WsOutgoingRead(conversationId = conversationId))
+            val json = org.json.JSONObject().put("event", "chat.read").put("data",
+                org.json.JSONObject().put("conversationId", conversationId)).toString()
             webSocket?.send(json)
         } catch (e: Exception) {
             Log.w(TAG, "Error sending read receipt: ${e.message}")
@@ -470,6 +464,9 @@ class OnChatWebSocketManager private constructor() {
                 }
                 val dataObj = org.json.JSONObject()
                 data?.forEach { (k, v) -> dataObj.put(k, v) }
+                dataObj.put("callId", callId)
+                conversationId?.let { dataObj.put("conversationId", it) }
+                dataObj.put("callerWalletId", ApiClient.activeWalletId)
                 put("data", dataObj)
                 put("callerWalletId", ApiClient.activeWalletId)
                 put("senderWalletId", ApiClient.activeWalletId)
@@ -483,6 +480,13 @@ class OnChatWebSocketManager private constructor() {
 
     fun disconnect() {
         shouldReconnect = false
+        reconnectJob?.cancel()
+        reconnectJob = null
+        isConnecting.set(false)
+        _onlineUsers.value = emptySet()
+        _typingStatus.value = emptyMap()
+        typingJobs.values.forEach { it.cancel() }
+        typingJobs.clear()
         stopHeartbeat()
         webSocket?.close(1000, "User disconnected")
         webSocket = null

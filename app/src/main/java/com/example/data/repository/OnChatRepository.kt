@@ -386,9 +386,10 @@ class OnChatRepository(private val context: Context) {
             val cookieToken = headerCookies.firstOrNull { it.contains("cashpay-token") }?.let {
                 Regex("""cashpay-token=([^;]+)""").find(it)?.groupValues?.get(1)?.trim()
             }
-            val token = bodyToken ?: cookieToken ?: ApiClient.authToken?.ifBlank { null } ?: "session_authenticated_${userId}_${System.currentTimeMillis()}"
+            val token = bodyToken ?: cookieToken
 
-            if (response.isSuccessful && token.isNotBlank()) {
+            if (response.isSuccessful && response.body()?.success == true && !token.isNullOrBlank()) {
+                ApiClient.clearSession()
                 ApiClient.authToken = token
                 SessionTokenStore.saveToken(token)
 
@@ -612,10 +613,12 @@ class OnChatRepository(private val context: Context) {
         conversationDao.clearAllConversations()
         messageDao.clearAllMessages()
         callDao.clearCalls()
-        ApiClient.authToken = null
-        ApiClient.activeWalletId = ""
+        com.example.data.api.OnChatWebSocketManager.getInstance().disconnect()
+        ApiClient.clearSession()
         SessionTokenStore.clear()
         contactCheckCache.clear()
+        readConversationsSet.clear()
+        java.io.File(context.cacheDir, "attachments").deleteRecursively()
     }
 
     suspend fun getTransactions(limit: Int = 50, offset: Int = 0): Result<TransactionsResponse> = withContext(Dispatchers.IO) {
@@ -1464,7 +1467,7 @@ class OnChatRepository(private val context: Context) {
         fileName: String? = null,
         isMine: Boolean = true
     ) = withContext(Dispatchers.IO) {
-        val session = sessionDao.getSession()
+        val session = sessionDao.getSession() ?: error("Authentification requise")
         val senderId = session?.userId?.toString() ?: "1"
         val senderName = session?.name ?: "Moi"
         val now = System.currentTimeMillis()
@@ -1483,7 +1486,7 @@ class OnChatRepository(private val context: Context) {
             status = "sending",
             isEdited = false,
             type = type,
-            metadataJson = null,
+            metadataJson = metadata?.let { org.json.JSONObject(it).toString() },
             fileUrl = fileUrl,
             fileName = fileName
         )
@@ -1514,23 +1517,30 @@ class OnChatRepository(private val context: Context) {
         // Post to remote server: POST /api/v1/chat/conversations/{conversationId}
         val request = SendMessageRequest(
             content = content,
-            type = type
+            type = type,
+            metadata = metadata,
+            fileUrl = fileUrl ?: metadata?.get("fileUrl"),
+            fileName = fileName ?: metadata?.get("fileName")
         )
 
         try {
             val directResp = ApiClient.apiService.postMessage(conversationId, request)
-            if (directResp.isSuccessful) {
-                val returnedMsg = directResp.body()?.message
-                val finalId = returnedMsg?.id?.toString() ?: messageId
-                if (finalId != messageId) {
-                    messageDao.deleteMessage(messageId)
-                }
-                messageDao.insertMessage(entity.copy(id = finalId, status = "delivered"))
-            } else {
-                messageDao.insertMessage(entity.copy(status = "sent"))
+            val body = directResp.body()
+            val returnedMsg = body?.message
+            if (!directResp.isSuccessful || body?.success != true || returnedMsg == null) {
+                error(body?.error ?: "Échec de l'envoi (HTTP ${directResp.code()})")
             }
-        } catch (_: Exception) {
-            messageDao.insertMessage(entity.copy(status = "sent"))
+            if (returnedMsg.id != messageId) messageDao.deleteMessage(messageId)
+            messageDao.insertMessage(entity.copy(
+                id = returnedMsg.id,
+                status = returnedMsg.status ?: "sent",
+                metadataJson = returnedMsg.metadata?.let { org.json.JSONObject(it).toString() } ?: entity.metadataJson,
+                fileUrl = returnedMsg.fileUrl ?: returnedMsg.metadata?.get("fileUrl") ?: fileUrl,
+                fileName = returnedMsg.fileName ?: returnedMsg.metadata?.get("fileName") ?: fileName
+            ))
+        } catch (e: Exception) {
+            messageDao.insertMessage(entity.copy(status = "failed"))
+            throw e
         }
     }
 
@@ -1858,6 +1868,10 @@ class OnChatRepository(private val context: Context) {
         Result.success(true)
     }
 
+    suspend fun markOutgoingMessagesAsRead(conversationId: String) = withContext(Dispatchers.IO) {
+        messageDao.markOutgoingMessagesAsRead(conversationId)
+    }
+
     suspend fun markConversationMessagesAsRead(conversationId: String) = withContext(Dispatchers.IO) {
         readConversationsSet.add(conversationId)
         messageDao.markConversationMessagesAsRead(conversationId)
@@ -1909,7 +1923,7 @@ class OnChatRepository(private val context: Context) {
             val requestBody = fileBytes.toRequestBody(mimeType.toMediaTypeOrNull())
             val part = MultipartBody.Part.createFormData("file", fileName, requestBody)
             val response = ApiClient.apiService.uploadMedia(part)
-            if (response.isSuccessful && response.body() != null) {
+            if (response.isSuccessful && response.body()?.success == true) {
                 val resolved = response.body()!!.resolvedUrl
                 if (!resolved.isNullOrBlank()) {
                     return@withContext resolved
@@ -1995,12 +2009,9 @@ class OnChatRepository(private val context: Context) {
             Log.d("VideoAPI", "POST $url -> HTTP ${response.code()}")
             if (response.isSuccessful && response.body() != null) {
                 val body = response.body()!!
-                if (body.video != null) {
+                if (body.success && body.video != null && body.video.resolvedUrl.isNotBlank()) {
                     Log.d("VideoAPI", "Upload SUCCESS | Video ID: ${body.video.id} | URL: ${body.video.resolvedUrl}")
                     Result.success(body.video)
-                } else if (body.success) {
-                    Log.d("VideoAPI", "Upload SUCCESS with response")
-                    Result.success(VideoItem(id = System.currentTimeMillis(), url = body.video?.url))
                 } else {
                     Log.w("VideoAPI", "Upload failed in body: ${body.error}")
                     Result.failure(Exception(body.error ?: body.message ?: "Échec de l'enregistrement vidéo"))
