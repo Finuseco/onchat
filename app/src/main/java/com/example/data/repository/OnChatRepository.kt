@@ -115,16 +115,6 @@ class OnChatRepository(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    suspend fun purgeMockData() = withContext(Dispatchers.IO) {
-        // Safe no-op to ensure user discussions and message history are never wiped on session reload
-    }
-
-    suspend fun initDefaultDataIfEmpty() = withContext(Dispatchers.IO) {
-        try {
-            callDao.clearMockCalls()
-        } catch (_: Exception) {}
-    }
-
     // --- Countries API ---
 
     private val defaultCountries = listOf(

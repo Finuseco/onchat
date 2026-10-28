@@ -520,7 +520,6 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     private fun checkExistingSession() {
         viewModelScope.launch {
             _isSessionChecking.value = true
-            repository.initDefaultDataIfEmpty()
 
             // Check if valid session exists
             val session = repository.getSession()

@@ -20,7 +20,6 @@ android {
         require(wsUrl.startsWith("wss://") && !wsUrl.contains('"')) { "onchatWsUrl must be a secure public WebSocket URL" }
         buildConfigField("String", "ONCHAT_WS_URL", "\"$wsUrl\"")
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -114,14 +113,4 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
 
-    // Unit Testing
-    testImplementation(libs.junit)
-    testImplementation(libs.androidx.core)
-    testImplementation(libs.androidx.runner)
-    testImplementation(libs.androidx.junit)
-    testImplementation(libs.robolectric)
-    testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.androidx.compose.ui.test.junit4)
-    testImplementation(libs.roborazzi)
-    testImplementation(libs.roborazzi.compose)
 }

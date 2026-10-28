@@ -44,8 +44,6 @@ interface ConversationDao {
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteConversation(id: String)
 
-    @Query("DELETE FROM conversations WHERE id LIKE 'legacy_mock_%'")
-    suspend fun clearMockConversations()
 
     @Query("DELETE FROM conversations")
     suspend fun clearAllConversations()
@@ -80,8 +78,6 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteMessagesForConversation(conversationId: String)
 
-    @Query("DELETE FROM messages WHERE conversationId LIKE 'legacy_mock_%'")
-    suspend fun clearMockMessages()
 
     @Query("DELETE FROM messages")
     suspend fun clearAllMessages()
@@ -101,8 +97,6 @@ interface GroupDao {
     @Query("DELETE FROM groups WHERE id = :groupId")
     suspend fun deleteGroup(groupId: Long)
 
-    @Query("DELETE FROM groups WHERE id IN (1, 2, 3)")
-    suspend fun clearMockGroups()
 }
 
 @Dao
@@ -119,8 +113,6 @@ interface StatusDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertStatus(status: StatusEntity)
 
-    @Query("DELETE FROM statuses WHERE userId IN (2, 3)")
-    suspend fun clearMockStatuses()
 }
 
 @Dao
@@ -131,8 +123,6 @@ interface CallDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCall(call: CallEntity)
 
-    @Query("DELETE FROM calls WHERE peerName IN ('Patrick Lubanda', 'Marc Kanku', 'Projet de Fin d''Année (Conférence)') OR peerName LIKE '%test%' OR peerName LIKE '%Test%'")
-    suspend fun clearMockCalls()
 
     @Query("DELETE FROM calls")
     suspend fun clearCalls()
