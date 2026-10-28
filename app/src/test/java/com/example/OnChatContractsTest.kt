@@ -10,6 +10,14 @@ import org.junit.Test
 
 /** Offline contracts only; never call a deployed CashPay API. */
 class OnChatContractsTest {
+    @Test fun meetingLinksPreserveTicketsAndRejectUntrustedOrigins() {
+        val code = "room-1234"
+        assertEquals("https://app.cashpay-all.com/feedback/meet/$code", com.example.data.api.MeetingLinks.canonical(code))
+        assertEquals("https://app.cashpay-all.com/feedback/meet/$code?ticket=OC-code", com.example.data.api.MeetingLinks.canonical("https://app.cashpay-all.com/feedback/meet/$code?ticket=OC-code"))
+        assertNull(com.example.data.api.MeetingLinks.canonical("https://evil.example/feedback/meet/$code"))
+        assertNull(com.example.data.api.MeetingLinks.canonical("http://app.cashpay-all.com/feedback/meet/$code"))
+        assertNull(com.example.data.api.MeetingLinks.canonical("https://name@app.cashpay-all.com/feedback/meet/$code"))
+    }
     @Test fun attachmentReferencesSurviveSerialization() {
         val adapter = Moshi.Builder().build().adapter(SendMessageRequest::class.java)
         val source = SendMessageRequest("", "doc", mapOf("fileName" to "report.pdf"),

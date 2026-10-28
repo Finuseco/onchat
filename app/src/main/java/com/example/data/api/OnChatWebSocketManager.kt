@@ -69,6 +69,25 @@ class OnChatWebSocketManager private constructor() {
     private val _connectionStatus = MutableStateFlow(WsConnectionStatus.DISCONNECTED)
     val connectionStatus: StateFlow<WsConnectionStatus> = _connectionStatus.asStateFlow()
 
+    private val watchedMeetings = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val _meetingStates = MutableStateFlow<Map<String, MeetingStatusResponse>>(emptyMap())
+    val meetingStates: StateFlow<Map<String, MeetingStatusResponse>> = _meetingStates.asStateFlow()
+
+    private fun subscribeMeeting(code: String) {
+        webSocket?.send(org.json.JSONObject().put("event", "meet.watch").put("data", org.json.JSONObject().put("meetCode", code)).toString())
+    }
+    fun watchMeeting(code: String) {
+        val count = watchedMeetings.merge(code, 1) { old, added -> old + added } ?: 1
+        if (count > 1) return
+        if (_connectionStatus.value == WsConnectionStatus.CONNECTED) subscribeMeeting(code) else connect()
+    }
+    fun unwatchMeeting(code: String) {
+        val count = watchedMeetings.computeIfPresent(code) { _, current -> if (current > 1) current - 1 else null }
+        if (count != null) return
+        _meetingStates.value = _meetingStates.value - code
+        webSocket?.send(org.json.JSONObject().put("event", "meet.unwatch").put("data", org.json.JSONObject().put("meetCode", code)).toString())
+    }
+
     private val _incomingMessages = MutableSharedFlow<Pair<String, ApiMessage>>(extraBufferCapacity = 64)
     val incomingMessages: SharedFlow<Pair<String, ApiMessage>> = _incomingMessages.asSharedFlow()
 
@@ -129,6 +148,7 @@ class OnChatWebSocketManager private constructor() {
                 reconnectAttempt = 0
                 _connectionStatus.value = WsConnectionStatus.CONNECTED
                 
+                watchedMeetings.keys.forEach { subscribeMeeting(it) }
                 startHeartbeat()
                 if (wasReconnecting) {
                     onReconnected?.invoke()
@@ -242,6 +262,15 @@ class OnChatWebSocketManager private constructor() {
             val effectiveEvent = if ((eventType == "notification" || eventType == "punch" || eventType == "push") && !innerEvent.isNullOrBlank()) innerEvent else eventType
 
             when (effectiveEvent) {
+                "meet.updated" -> {
+                    val code = dataMap?.get("meetCode")?.toString()
+                    if (code != null && watchedMeetings.containsKey(code)) {
+                        _meetingStates.value = _meetingStates.value + (code to MeetingStatusResponse(
+                            success = true, meetCode = code, status = dataMap["status"]?.toString(),
+                            participants = (dataMap["participants"] as? Number)?.toInt() ?: 0
+                        ))
+                    }
+                }
                 // 1. New Chat Message
                 "chat.message.created", "chat.message", "new_message", "message.created", "message", "new-message", "message_received" -> {
                     val convId = envelope?.resolvedConversationId
@@ -483,6 +512,8 @@ class OnChatWebSocketManager private constructor() {
         reconnectJob?.cancel()
         reconnectJob = null
         isConnecting.set(false)
+        watchedMeetings.clear()
+        _meetingStates.value = emptyMap()
         _onlineUsers.value = emptySet()
         _typingStatus.value = emptyMap()
         typingJobs.values.forEach { it.cancel() }

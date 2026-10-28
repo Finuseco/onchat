@@ -11,7 +11,8 @@ data class Group(
     @Json(name = "description") val description: String? = null,
     @Json(name = "photoUrl") val photoUrl: String? = null,
     @Json(name = "membersCount") val membersCount: Int = 1,
-    @Json(name = "createdAt") val createdAt: String? = null
+    @Json(name = "createdAt") val createdAt: String? = null,
+    @Json(name = "messages") val messages: List<ApiMessage> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)

@@ -297,7 +297,9 @@ fun ChatDetailScreen(
                     },
                     actions = {
                         IconButton(onClick = {
-                            viewModel.startCall(
+                            if (conv?.isGroup == true) {
+                                conversationId.removePrefix("g_").toLongOrNull()?.let { viewModel.createGroupMeeting(it, "audio") }
+                            } else viewModel.startCall(
                                 peerName = conv?.name ?: "Contact",
                                 peerWalletId = conv?.contactWalletId ?: "",
                                 peerAvatar = conv?.avatarUrl,
@@ -311,7 +313,9 @@ fun ChatDetailScreen(
                             )
                         }
                         IconButton(onClick = {
-                            viewModel.startCall(
+                            if (conv?.isGroup == true) {
+                                conversationId.removePrefix("g_").toLongOrNull()?.let { viewModel.createGroupMeeting(it, "video") }
+                            } else viewModel.startCall(
                                 peerName = conv?.name ?: "Contact",
                                 peerWalletId = conv?.contactWalletId ?: "",
                                 peerAvatar = conv?.avatarUrl,

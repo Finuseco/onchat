@@ -615,6 +615,7 @@ class OnChatRepository(private val context: Context) {
         callDao.clearCalls()
         com.example.data.api.OnChatWebSocketManager.getInstance().disconnect()
         ApiClient.clearSession()
+        android.os.Handler(android.os.Looper.getMainLooper()).post { android.webkit.CookieManager.getInstance().removeAllCookies(null) }
         SessionTokenStore.clear()
         contactCheckCache.clear()
         readConversationsSet.clear()
@@ -1067,6 +1068,19 @@ class OnChatRepository(private val context: Context) {
     }
 
     suspend fun fetchConversationDetails(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        if (conversationId.startsWith("g_")) {
+            val groupId = conversationId.removePrefix("g_").toLongOrNull()
+                ?: return@withContext Result.failure(IllegalArgumentException("Groupe invalide"))
+            try {
+                val response = ApiClient.apiService.getGroupDetails(groupId)
+                val group = response.body()?.group
+                if (!response.isSuccessful || response.body()?.success != true || group == null) error("Discussion de groupe inaccessible")
+                val localIds = messageDao.getMessagesFlow(conversationId).firstOrNull().orEmpty().map { it.id }.toSet()
+                group.messages.filter { it.id !in localIds }.forEach { insertWebSocketMessage(conversationId, it) }
+                return@withContext Result.success(Unit)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { return@withContext Result.failure(e) }
+        }
         // Synchronize full messages and contact with confirmed route: GET /api/v1/chat/conversations/{conversationId}
         try {
             val response = ApiClient.apiService.getConversationDetails(conversationId)
@@ -1126,7 +1140,10 @@ class OnChatRepository(private val context: Context) {
                     val isMine = apiMsg.senderId == session?.userId || (apiMsg.senderId == null && session != null)
                     val parsedId = apiMsg.id.toString()
                     val timestamp = try {
-                        apiMsg.timestamp?.toLong() ?: apiMsg.createdAt?.toLong() ?: System.currentTimeMillis()
+                        val raw = apiMsg.timestamp ?: apiMsg.createdAt
+            raw?.toLongOrNull() ?: raw?.let { value ->
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", java.util.Locale.US).parse(value)?.time
+            } ?: System.currentTimeMillis()
                     } catch (_: Exception) {
                         System.currentTimeMillis()
                     }
@@ -1395,7 +1412,10 @@ class OnChatRepository(private val context: Context) {
         val isMine = apiMsg.senderId == session?.userId
 
         val timestamp = try {
-            apiMsg.timestamp?.toLong() ?: apiMsg.createdAt?.toLong() ?: System.currentTimeMillis()
+            val raw = apiMsg.timestamp ?: apiMsg.createdAt
+            raw?.toLongOrNull() ?: raw?.let { value ->
+                java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", java.util.Locale.US).parse(value)?.time
+            } ?: System.currentTimeMillis()
         } catch (_: Exception) {
             System.currentTimeMillis()
         }
@@ -1524,7 +1544,10 @@ class OnChatRepository(private val context: Context) {
         )
 
         try {
-            val directResp = ApiClient.apiService.postMessage(conversationId, request)
+            val directResp = if (conversationId.startsWith("g_")) {
+                val groupId = conversationId.removePrefix("g_").toLongOrNull() ?: error("Groupe invalide")
+                ApiClient.apiService.postGroupMessage(groupId, request)
+            } else ApiClient.apiService.postMessage(conversationId, request)
             val body = directResp.body()
             val returnedMsg = body?.message
             if (!directResp.isSuccessful || body?.success != true || returnedMsg == null) {

@@ -1376,6 +1376,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val convId = repository.getOrCreateConversationForGroup(groupId, name)
             _activeConversationId.value = convId
+            repository.fetchConversationDetails(convId)
         }
     }
 
@@ -2294,60 +2295,33 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun joinMeeting(
-        meetCode: String,
-        onComplete: ((Boolean) -> Unit)? = null
-    ) {
-        viewModelScope.launch {
-            _isMeetingsLoading.value = true
-            meetingsRepository.joinMeeting(meetCode).onSuccess { joinRes ->
-                val code = joinRes.meetCode ?: meetCode
-                // Charger les participants
-                val participantsRes = meetingsRepository.getMeetingParticipants(code).getOrNull()
-                val participants = participantsRes?.participants ?: emptyList()
-                val isHost = participants.any { it.isHost && (it.userId == (ApiClient.currentUserId ?: 101L)) }
+    private val _meetingWebUrl = MutableStateFlow<String?>(null)
+    val meetingWebUrl: StateFlow<String?> = _meetingWebUrl.asStateFlow()
 
-                val session = ActiveMeetingSession(
-                    meetCode = code,
-                    topic = joinRes.topic ?: "Réunion OnChat",
-                    type = joinRes.type ?: "video",
-                    joinUrl = joinRes.joinUrl ?: "https://app.cashpay-all.com/feedback/meet/$code",
-                    isHost = isHost,
-                    status = "active",
-                    canSpeak = isHost || participants.firstOrNull { it.userId == (ApiClient.currentUserId ?: 999L) }?.canSpeak ?: true,
-                    isHandRaised = false,
-                    isMicMuted = false,
-                    isCameraOn = joinRes.type != "audio",
-                    isCameraFront = true,
-                    participants = participants,
-                    billing = null
-                )
-                _activeMeeting.value = session
-                fetchMeetingBilling(code)
-                _successMessage.value = "Connecté à la réunion $code"
-                onComplete?.invoke(true)
-            }.onFailure { err ->
-                Log.w("OnChatViewModel", "joinMeeting API warning: ${err.message}. Entering direct meeting room...")
-                val session = ActiveMeetingSession(
-                    meetCode = meetCode,
-                    topic = "Réunion OnChat",
-                    type = "video",
-                    joinUrl = "https://app.cashpay-all.com/feedback/meet/$meetCode",
-                    isHost = false,
-                    status = "active",
-                    canSpeak = true,
-                    isHandRaised = false,
-                    isMicMuted = false,
-                    isCameraOn = true,
-                    isCameraFront = true,
-                    participants = emptyList(),
-                    billing = null
-                )
-                _activeMeeting.value = session
-                _lastMeetingApiError.value = err.message
-                onComplete?.invoke(true)
-            }
-            _isMeetingsLoading.value = false
+    fun joinMeeting(meetCode: String) {
+        val url = com.example.data.api.MeetingLinks.canonical(meetCode)
+        if (url == null) { _errorMessage.value = "Lien ou code OnChat invalide"; return }
+        _meetingWebUrl.value = url
+    }
+
+    fun closeMeetingSurface() {
+        val url = _meetingWebUrl.value
+        _meetingWebUrl.value = null
+        if (url != null) viewModelScope.launch {
+            val code = java.net.URI(url).path.substringAfterLast('/')
+            meetingsRepository.leaveMeeting(code)
+        }
+    }
+
+    fun createGroupMeeting(groupId: Long, type: String) {
+        viewModelScope.launch {
+            try {
+                val response = ApiClient.apiService.createGroupMeeting(groupId, mapOf("type" to type))
+                val body = response.body()
+                if (!response.isSuccessful || body?.success != true || body.meetCode.isNullOrBlank()) error(body?.error ?: "Création de réunion impossible")
+                joinMeeting(body.meetCode)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { _errorMessage.value = e.message }
         }
     }
 
