@@ -28,4 +28,4 @@ La mission complète des 17 fonctionnalités n'est pas validée. Restent notamme
 
 ## GitHub
 
-Les deux dépôts ont reçu HTTP 403 au push et `Resource not accessible by integration` à la création de branche via connecteur. Aucun lien de commit distant ni de PR ne peut être annoncé avant publication confirmée. Aucun changement de production ni fusion sur main.
+Publication GitHub confirmée le 28 octobre 2026 après mise à jour des permissions. Branche `codex/fix-onchat-android` poussée. PR en brouillon : https://github.com/Finuseco/onchat/pull/1. Les refus HTTP 403 précédents sont résolus. Aucun changement de production ni fusion sur main.
