@@ -1,12 +1,15 @@
 package com.example.ui.screens.chats
 
+import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
@@ -22,6 +25,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.layout.ContentScale
+import androidx.core.content.ContextCompat
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -90,7 +97,87 @@ fun ChatDetailScreen(
     // Audio recording state
     val audioRecorder = remember { AudioRecorder(context) }
     var isRecording by remember { mutableStateOf(false) }
+    var recordingDurationSeconds by remember { mutableIntStateOf(0) }
     var recordingFile by remember { mutableStateOf<java.io.File?>(null) }
+
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                val file = java.io.File(context.cacheDir, "voice_note_${System.currentTimeMillis()}.m4a")
+                recordingFile = file
+                recordingDurationSeconds = 0
+                audioRecorder.start(file)
+                isRecording = true
+            } catch (e: Exception) {
+                Toast.makeText(context, "Erreur micro: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Permission microphone requise", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Recording duration timer ticker (unlimited duration, no 10-minute cap)
+    LaunchedEffect(isRecording) {
+        if (isRecording) {
+            while (isRecording) {
+                kotlinx.coroutines.delay(1000)
+                recordingDurationSeconds += 1
+            }
+        }
+    }
+
+    fun startRecordingFlow() {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            try {
+                val file = java.io.File(context.cacheDir, "voice_note_${System.currentTimeMillis()}.m4a")
+                recordingFile = file
+                recordingDurationSeconds = 0
+                audioRecorder.start(file)
+                isRecording = true
+            } catch (e: Exception) {
+                Toast.makeText(context, "Erreur micro: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    fun stopAndSendRecording() {
+        if (!isRecording) return
+        try {
+            audioRecorder.stop()
+        } catch (_: Exception) {}
+        isRecording = false
+        val file = recordingFile
+        if (file != null && file.exists() && file.length() > 0) {
+            viewModel.sendAudioMessage(file)
+            Toast.makeText(context, "Note vocale envoyée !", Toast.LENGTH_SHORT).show()
+        }
+        recordingFile = null
+        recordingDurationSeconds = 0
+    }
+
+    fun cancelRecording() {
+        if (!isRecording) return
+        try {
+            audioRecorder.stop()
+        } catch (_: Exception) {}
+        isRecording = false
+        recordingFile?.delete()
+        recordingFile = null
+        recordingDurationSeconds = 0
+        Toast.makeText(context, "Enregistrement annulé", Toast.LENGTH_SHORT).show()
+    }
+
+    // Full Screen Image Viewer state (Triple of imageUrl, fileName, message)
+    var selectedImageForViewer by remember { mutableStateOf<Triple<String, String?, Message>?>(null) }
 
     // Attachments bottom sheet & Emoji / Sticker picker states
     var showAttachmentSheet by remember { mutableStateOf(false) }
@@ -267,126 +354,182 @@ fun ChatDetailScreen(
                         .background(CashPayNavy.copy(alpha = 0.9f))
                         .navigationBarsPadding()
                 ) {
-                    // Bottom Input Bar matching Screenshot 1:
-                    // [😄 Emoji] [Message field] [📎 Paperclip Attachment] [🎤/➤ Send]
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 1. Emoji / Stickers Toggle Button
-                        IconButton(
-                            onClick = {
-                                showEmojiStickerPicker = !showEmojiStickerPicker
-                            },
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (showEmojiStickerPicker) Icons.Default.Keyboard else Icons.Default.SentimentSatisfiedAlt,
-                                contentDescription = "Émojis & Stickers",
-                                tint = if (showEmojiStickerPicker) OnChatCyan else CashPayGrey,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-
-                        // 2. Main Message Input Field
-                        TextField(
-                            value = inputText,
-                            onValueChange = {
-                                inputText = it
-                                if (it.isNotEmpty()) {
-                                    viewModel.sendTyping(conversationId)
-                                }
-                                if (showEmojiStickerPicker) {
-                                    showEmojiStickerPicker = false
-                                }
-                            },
-                            placeholder = {
-                                Text("Message", color = CashPayGrey, fontSize = 15.sp)
-                            },
-                            colors = TextFieldDefaults.colors(
-                                focusedContainerColor = CashPayNavySurface.copy(alpha = 0.7f),
-                                unfocusedContainerColor = CashPayNavySurface.copy(alpha = 0.7f),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                cursorColor = OnChatCyan,
-                                focusedIndicatorColor = Color.Transparent,
-                                unfocusedIndicatorColor = Color.Transparent
-                            ),
-                            shape = RoundedCornerShape(22.dp),
+                    if (isRecording) {
+                        // Dedicated Live Voice Recording Bar
+                        Row(
                             modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 44.dp, max = 100.dp),
-                            maxLines = 4
-                        )
-
-                        // 3. Attachment Paperclip Button (Opens Wallet / Fichier / Position / Liste / Contact)
-                        IconButton(
-                            onClick = {
-                                showAttachmentSheet = true
-                            },
-                            modifier = Modifier.size(40.dp)
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp)
+                                .background(CashPayNavyDark, shape = RoundedCornerShape(24.dp))
+                                .border(1.dp, Color(0xFFFF5252).copy(alpha = 0.5f), RoundedCornerShape(24.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.AttachFile,
-                                contentDescription = "Menu Pièces Jointes & Wallet",
-                                tint = CashPayGrey,
-                                modifier = Modifier.size(24.dp)
+                            // Blinking recording dot
+                            val pulseTrans = rememberInfiniteTransition(label = "rec")
+                            val recAlpha by pulseTrans.animateFloat(
+                                initialValue = 0.2f,
+                                targetValue = 1f,
+                                animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
+                                label = "rec_alpha"
                             )
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFFF5252).copy(alpha = recAlpha))
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            // Timer mm:ss (Unlimited recording, no 10-minute cap)
+                            val recMins = recordingDurationSeconds / 60
+                            val recSecs = recordingDurationSeconds % 60
+                            Text(
+                                text = String.format(Locale.US, "%02d:%02d", recMins, recSecs),
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Enregistrement audio...",
+                                color = CashPayGrey,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1
+                            )
+
+                            // Cancel / Trash Button
+                            IconButton(
+                                onClick = { cancelRecording() },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Annuler",
+                                    tint = Color(0xFFFF5252),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(6.dp))
+
+                            // Send Voice Note Button
+                            IconButton(
+                                onClick = { stopAndSendRecording() },
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(OnChatCyan)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Send,
+                                    contentDescription = "Envoyer l'audio",
+                                    tint = CashPayNavyDark,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
-
-                        Spacer(modifier = Modifier.width(2.dp))
-
-                        // 4. Send or Audio Record Button
-                        Box(
+                    } else {
+                        // Bottom Input Bar matching Screenshot 1:
+                        // [😄 Emoji] [Message field] [📎 Paperclip Attachment] [🎤/➤ Send]
+                        Row(
                             modifier = Modifier
-                                .size(44.dp)
-                                .clip(CircleShape)
-                                .background(brush = if (inputText.isNotBlank() || isRecording) OnChatPrimaryGradient else Brush.horizontalGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0))))
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            if (inputText.isBlank()) {
-                                                try {
-                                                    val file = java.io.File(context.cacheDir, "voice_note_${System.currentTimeMillis()}.m4a")
-                                                    recordingFile = file
-                                                    audioRecorder.start(file)
-                                                    isRecording = true
-                                                } catch (e: Exception) {
-                                                    Toast.makeText(context, "Erreur micro: ${e.message}", Toast.LENGTH_SHORT).show()
-                                                }
-                                                try {
-                                                    awaitRelease()
-                                                } finally {
-                                                    if (isRecording) {
-                                                        audioRecorder.stop()
-                                                        isRecording = false
-                                                        recordingFile?.let { viewModel.sendAudioMessage(it) }
-                                                        Toast.makeText(context, "Note vocale envoyée", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        onTap = {
-                                            if (inputText.isNotBlank()) {
-                                                viewModel.sendMessage(inputText)
-                                                inputText = ""
-                                                showEmojiStickerPicker = false
-                                            } else {
-                                                Toast.makeText(context, "Maintenez pour enregistrer", Toast.LENGTH_SHORT).show()
-                                            }
-                                        }
-                                    )
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 1. Emoji / Stickers Toggle Button
+                            IconButton(
+                                onClick = {
+                                    showEmojiStickerPicker = !showEmojiStickerPicker
                                 },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = if (inputText.isNotBlank()) Icons.Default.Send else if (isRecording) Icons.Default.Stop else Icons.Default.Mic,
-                                contentDescription = if (inputText.isNotBlank()) "Envoyer" else "Enregistrer audio",
-                                tint = Color.White,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (showEmojiStickerPicker) Icons.Default.Keyboard else Icons.Default.SentimentSatisfiedAlt,
+                                    contentDescription = "Émojis & Stickers",
+                                    tint = if (showEmojiStickerPicker) OnChatCyan else CashPayGrey,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            // 2. Main Message Input Field
+                            TextField(
+                                value = inputText,
+                                onValueChange = {
+                                    inputText = it
+                                    if (it.isNotEmpty()) {
+                                        viewModel.sendTyping(conversationId)
+                                    }
+                                    if (showEmojiStickerPicker) {
+                                        showEmojiStickerPicker = false
+                                    }
+                                },
+                                placeholder = {
+                                    Text("Message", color = CashPayGrey, fontSize = 15.sp)
+                                },
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = CashPayNavySurface.copy(alpha = 0.7f),
+                                    unfocusedContainerColor = CashPayNavySurface.copy(alpha = 0.7f),
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    cursorColor = OnChatCyan,
+                                    focusedIndicatorColor = Color.Transparent,
+                                    unfocusedIndicatorColor = Color.Transparent
+                                ),
+                                shape = RoundedCornerShape(22.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 44.dp, max = 100.dp),
+                                maxLines = 4
                             )
+
+                            // 3. Attachment Paperclip Button (Opens Wallet / Fichier / Position / Liste / Contact)
+                            IconButton(
+                                onClick = {
+                                    showAttachmentSheet = true
+                                },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AttachFile,
+                                    contentDescription = "Menu Pièces Jointes & Wallet",
+                                    tint = CashPayGrey,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(2.dp))
+
+                            // 4. Send or Audio Record Button
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        brush = if (inputText.isNotBlank()) OnChatPrimaryGradient
+                                        else Brush.horizontalGradient(listOf(Color(0xFF1E88E5), Color(0xFF1565C0)))
+                                    )
+                                    .clickable {
+                                        if (inputText.isNotBlank()) {
+                                            viewModel.sendMessage(inputText)
+                                            inputText = ""
+                                            showEmojiStickerPicker = false
+                                        } else {
+                                            startRecordingFlow()
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (inputText.isNotBlank()) Icons.Default.Send else Icons.Default.Mic,
+                                    contentDescription = if (inputText.isNotBlank()) "Envoyer" else "Enregistrer audio",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
                         }
                     }
 
@@ -462,6 +605,13 @@ fun ChatDetailScreen(
                             MessageBubbleItem(
                                 message = msg,
                                 myAvatar = session?.avatarUrl,
+                                contactAvatar = conv?.avatarUrl,
+                                onImageClick = { imgUrl, fileName ->
+                                    selectedImageForViewer = Triple(imgUrl, fileName, msg)
+                                },
+                                onJoinMeeting = { meetCode ->
+                                    viewModel.joinMeeting(meetCode)
+                                },
                                 onLongPress = {
                                     if (msg.isMine) {
                                         selectedMessageForAction = msg
@@ -473,6 +623,23 @@ fun ChatDetailScreen(
                 }
             }
         }
+    }
+
+    // Full Screen Zoomable Image Viewer Dialog with Multi-Conversation Forwarding
+    if (selectedImageForViewer != null) {
+        val (imgUrl, fName, msg) = selectedImageForViewer!!
+        ImageViewerDialog(
+            imageUrl = imgUrl,
+            fileName = fName,
+            senderName = if (msg.isMine) "Moi" else (conv?.name ?: msg.senderName),
+            timestamp = msg.timestamp,
+            conversations = conversations,
+            onDismiss = { selectedImageForViewer = null },
+            onForward = { targetConvIds ->
+                viewModel.forwardMessageToConversations(targetConvIds, msg)
+                selectedImageForViewer = null
+            }
+        )
     }
 
     // Attachment Bottom Sheet Menu (Matches Screenshot 2: Wallet, Fichier, Position, Liste, Contact)
@@ -1570,12 +1737,21 @@ fun ChatDetailScreen(
 fun MessageBubbleItem(
     message: Message,
     myAvatar: String?,
+    contactAvatar: String? = null,
+    onImageClick: (imageUrl: String, fileName: String?) -> Unit = { _, _ -> },
+    onJoinMeeting: (meetCode: String) -> Unit = {},
     onLongPress: () -> Unit
 ) {
     val timeFormatted = remember(message.timestamp) {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
         sdf.format(Date(message.timestamp))
     }
+
+    val meetMatch = remember(message.content) {
+        Regex("""(?:feedback/meet/|meet/)([a-zA-Z0-9\-_]+)""").find(message.content)
+    }
+    val isMeetingMessage = meetMatch != null || message.type == "meeting"
+    val extractedMeetCode = meetMatch?.groupValues?.getOrNull(1) ?: message.metadata?.get("meetCode") ?: ""
 
     Row(
         modifier = Modifier
@@ -1593,7 +1769,7 @@ fun MessageBubbleItem(
             // Correspondent Avatar on the Left
             AvatarBadge(
                 name = message.senderName,
-                avatarUrl = message.senderAvatar,
+                avatarUrl = message.senderAvatar?.takeIf { it.isNotBlank() } ?: contactAvatar,
                 size = 34.dp,
                 isGroup = false
             )
@@ -1601,10 +1777,20 @@ fun MessageBubbleItem(
         }
 
         Box(
-            modifier = Modifier.widthIn(max = 260.dp),
+            modifier = Modifier.widthIn(max = 280.dp),
             contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart
         ) {
             when {
+                // Interactive Call & Meeting Invitation Card (Screenshot 2)
+                isMeetingMessage && extractedMeetCode.isNotBlank() -> {
+                    MeetingInviteBubble(
+                        message = message,
+                        meetCode = extractedMeetCode,
+                        timeFormatted = timeFormatted,
+                        onJoinMeeting = onJoinMeeting
+                    )
+                }
+
                 message.type == "in_chat_transfer" || message.transferAmount != null -> {
                     // Dedicated In-Chat Transfer Card (CashPay All)
                     Card(
@@ -1718,8 +1904,29 @@ fun MessageBubbleItem(
                     PollCardBubble(message = message, timeFormatted = timeFormatted)
                 }
 
-                // Standard Text / Document Bubble
+                // Standard Text / Image / Document Bubble
                 else -> {
+                    val rawUrl = message.fileUrl ?: if (message.content.startsWith("http")) message.content else null
+                    val fileNameLower = (message.fileName ?: message.content).lowercase()
+                    val isImageFile = message.type.equals("image", ignoreCase = true) ||
+                            fileNameLower.endsWith(".png") ||
+                            fileNameLower.endsWith(".jpg") ||
+                            fileNameLower.endsWith(".jpeg") ||
+                            fileNameLower.endsWith(".webp") ||
+                            fileNameLower.endsWith(".gif") ||
+                            fileNameLower.contains(".png ") ||
+                            fileNameLower.contains(".jpg ") ||
+                            fileNameLower.contains(".jpeg ")
+
+                    val resolvedImageUrl = when {
+                        rawUrl.isNullOrBlank() -> null
+                        rawUrl.startsWith("http://") || rawUrl.startsWith("https://") -> rawUrl
+                        rawUrl.startsWith("content://") || rawUrl.startsWith("file://") -> rawUrl
+                        rawUrl.startsWith("/") -> "https://app.cashpay-all.com$rawUrl"
+                        rawUrl.contains("uploads/") -> "https://app.cashpay-all.com/${rawUrl.substringAfter("uploads/")}"
+                        else -> "https://app.cashpay-all.com/$rawUrl"
+                    }
+
                     Box(
                         modifier = Modifier
                             .clip(
@@ -1734,20 +1941,87 @@ fun MessageBubbleItem(
                                 if (message.isMine) Modifier.background(brush = OnChatBubbleGradient)
                                 else Modifier.background(Color(0xFFE8F0FE)) // Light Blue for incoming
                             )
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         Column {
-                            if (message.type == "image" || !message.fileUrl.isNullOrBlank()) {
-                                androidx.compose.foundation.Image(
-                                    painter = coil.compose.rememberAsyncImagePainter(message.fileUrl ?: message.content),
-                                    contentDescription = "Image partagée",
+                            if (isImageFile && resolvedImageUrl != null) {
+                                // Real Interactive Async Image with Zoom & Viewer Click
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(max = 240.dp)
-                                        .clip(RoundedCornerShape(12.dp)),
-                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                )
-                                if (message.content.startsWith("http").not() && message.content.isNotBlank()) {
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            onImageClick(resolvedImageUrl, message.fileName ?: message.content)
+                                        }
+                                ) {
+                                    var isImgLoading by remember { mutableStateOf(true) }
+                                    var isImgError by remember { mutableStateOf(false) }
+
+                                    if (isImgLoading) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(200.dp)
+                                                .background(CashPayNavyDark.copy(alpha = 0.2f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(24.dp),
+                                                color = OnChatCyan,
+                                                strokeWidth = 2.dp
+                                            )
+                                        }
+                                    }
+
+                                    if (isImgError) {
+                                        Surface(
+                                            color = CashPayNavyDark.copy(alpha = 0.85f),
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(140.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.fillMaxSize(),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(Icons.Default.Image, contentDescription = null, tint = OnChatCyan, modifier = Modifier.size(32.dp))
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = message.fileName ?: "Photo partagée",
+                                                    color = Color.White,
+                                                    fontSize = 12.sp,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Text(
+                                                    text = "Cliquer pour ouvrir",
+                                                    color = OnChatCyan,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        AsyncImage(
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data(resolvedImageUrl)
+                                                .crossfade(true)
+                                                .listener(
+                                                    onStart = { isImgLoading = true; isImgError = false },
+                                                    onSuccess = { _, _ -> isImgLoading = false; isImgError = false },
+                                                    onError = { _, _ -> isImgLoading = false; isImgError = true }
+                                                )
+                                                .build(),
+                                            contentDescription = "Photo",
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(min = 160.dp, max = 280.dp),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                }
+
+                                if (message.content.isNotBlank() && !message.content.startsWith("http") && message.content != "🖼️ Photo") {
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = message.content,
@@ -1755,17 +2029,28 @@ fun MessageBubbleItem(
                                         fontSize = 14.sp
                                     )
                                 }
-                            } else if (message.type == "doc") {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        imageVector = Icons.Default.InsertDriveFile,
-                                        contentDescription = null,
-                                        tint = if (message.isMine) Color.White else OnChatBlue,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                            } else if (message.type == "doc" || (!message.fileUrl.isNullOrBlank() && !isImageFile)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(if (message.isMine) Color.White.copy(alpha = 0.2f) else OnChatBlue.copy(alpha = 0.15f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.InsertDriveFile,
+                                            contentDescription = null,
+                                            tint = if (message.isMine) Color.White else OnChatBlue,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = message.content,
+                                        text = message.fileName ?: message.content,
                                         color = if (message.isMine) Color.White else Color.Black,
                                         fontSize = 14.sp
                                     )

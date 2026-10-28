@@ -1117,6 +1117,8 @@ class OnChatRepository(private val context: Context) {
                     }
                 }
 
+                val convEntity = conversationDao.getConversationSync(conversationId)
+                val contactAvatar = convEntity?.avatarUrl
                 val msgEntities = body.resolvedMessages.map { apiMsg ->
                     val isMine = apiMsg.senderId == session?.userId || (apiMsg.senderId == null && session != null)
                     val parsedId = apiMsg.id.toString()
@@ -1141,8 +1143,8 @@ class OnChatRepository(private val context: Context) {
                         conversationId = conversationId,
                         senderId = (apiMsg.senderId?.toString()) ?: currentUserId,
                         senderWalletId = session?.walletId ?: ApiClient.activeWalletId,
-                        senderName = apiMsg.senderName ?: if (isMine) "Moi" else "Contact",
-                        senderAvatar = apiMsg.senderAvatar ?: if (isMine) session?.avatarUrl else null,
+                        senderName = apiMsg.senderName ?: if (isMine) "Moi" else (convEntity?.name ?: "Contact"),
+                        senderAvatar = apiMsg.senderAvatar?.takeIf { it.isNotBlank() } ?: if (isMine) session?.avatarUrl else contactAvatar,
                         content = apiMsg.content,
                         timestamp = timestamp,
                         isMine = isMine,
@@ -1359,7 +1361,9 @@ class OnChatRepository(private val context: Context) {
                     id = entity.id,
                     conversationId = entity.conversationId,
                     senderId = entity.senderId,
+                    senderWalletId = entity.senderWalletId,
                     senderName = entity.senderName,
+                    senderAvatar = entity.senderAvatar,
                     content = entity.content,
                     timestamp = entity.timestamp,
                     isMine = entity.isMine,
@@ -1369,6 +1373,8 @@ class OnChatRepository(private val context: Context) {
                     metadataJson = entity.metadataJson,
                     fileUrl = entity.fileUrl,
                     fileName = entity.fileName,
+                    durationSeconds = entity.durationSeconds,
+                    fileSizeBytes = entity.fileSizeBytes,
                     transferAmount = entity.transferAmount,
                     transferCurrency = entity.transferCurrency,
                     transferReference = entity.transferReference
@@ -1401,13 +1407,14 @@ class OnChatRepository(private val context: Context) {
             transferRef = apiMsg.metadata["reference"]
         }
 
+        val convEntity = conversationDao.getConversationSync(conversationId)
         val entity = MessageEntity(
             id = apiMsg.id,
             conversationId = conversationId,
             senderId = (apiMsg.senderId?.toString()) ?: (if (isMine) currentUserId else "contact"),
             senderWalletId = session?.walletId ?: ApiClient.activeWalletId,
-            senderName = apiMsg.senderName ?: if (isMine) "Moi" else "Contact",
-            senderAvatar = apiMsg.senderAvatar ?: if (isMine) session?.avatarUrl else null,
+            senderName = apiMsg.senderName ?: if (isMine) "Moi" else (convEntity?.name ?: "Contact"),
+            senderAvatar = apiMsg.senderAvatar?.takeIf { it.isNotBlank() } ?: if (isMine) session?.avatarUrl else convEntity?.avatarUrl,
             content = apiMsg.content,
             timestamp = timestamp,
             isMine = isMine,
