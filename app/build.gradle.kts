@@ -16,8 +16,10 @@ android {
         targetSdk = 35
         versionCode = 5
         versionName = "5.0"
+        val wsUrl = providers.gradleProperty("onchatWsUrl").orElse("wss://glob.cashpay-all.com/ws").get()
+        require(wsUrl.startsWith("wss://") && !wsUrl.contains('"')) { "onchatWsUrl must be a secure public WebSocket URL" }
+        buildConfigField("String", "ONCHAT_WS_URL", "\"$wsUrl\"")
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -93,6 +95,9 @@ dependencies {
     // Media3
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
+    implementation("androidx.media3:media3-transformer:1.5.1")
+    implementation("androidx.media3:media3-effect:1.5.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     // Datastore
     implementation(libs.androidx.datastore.preferences)
@@ -108,14 +113,4 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.ai)
 
-    // Unit Testing
-    testImplementation(libs.junit)
-    testImplementation(libs.androidx.core)
-    testImplementation(libs.androidx.runner)
-    testImplementation(libs.androidx.junit)
-    testImplementation(libs.robolectric)
-    testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.androidx.compose.ui.test.junit4)
-    testImplementation(libs.roborazzi)
-    testImplementation(libs.roborazzi.compose)
 }

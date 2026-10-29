@@ -164,6 +164,12 @@ interface OnChatApiService {
     ): Response<MeetingStatusResponse>
 
     // 3.4 Rejoindre une réunion
+    @POST("api/onchat/groups/{groupId}")
+    suspend fun postGroupMessage(@Path("groupId") groupId: Long, @Body request: SendMessageRequest): Response<SendMessageResponse>
+
+    @POST("api/onchat/groups/{groupId}/meetings")
+    suspend fun createGroupMeeting(@Path("groupId") groupId: Long, @Body request: Map<String, String>): Response<CreateMeetingResponse>
+
     @POST("api/v1/meetings/{meetCode}/join")
     suspend fun joinMeeting(
         @Path("meetCode") meetCode: String

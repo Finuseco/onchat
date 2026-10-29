@@ -134,7 +134,7 @@ fun VoiceMessageBubble(
                         .build()
                 )
                 if (resolvedAudioUrl.startsWith("http")) {
-                    setDataSource(resolvedAudioUrl)
+                    setDataSource(context, Uri.parse(resolvedAudioUrl), com.example.data.api.AuthenticatedMedia.headers(resolvedAudioUrl))
                 } else if (resolvedAudioUrl.startsWith("file://") || resolvedAudioUrl.startsWith("/")) {
                     val filePath = resolvedAudioUrl.removePrefix("file://")
                     val file = File(filePath)

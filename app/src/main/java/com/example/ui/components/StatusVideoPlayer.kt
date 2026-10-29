@@ -55,7 +55,12 @@ fun StatusVideoPlayer(
     var currentPosition by remember { mutableLongStateOf(0L) }
 
     val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
+        ExoPlayer.Builder(context).setMediaSourceFactory(
+            androidx.media3.exoplayer.source.DefaultMediaSourceFactory(
+                androidx.media3.datasource.DefaultDataSource.Factory(context,
+                    androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(com.example.data.api.AuthenticatedMedia.client))
+            )
+        ).build().apply {
             repeatMode = Player.REPEAT_MODE_ONE // Autoloop continuously
         }
     }

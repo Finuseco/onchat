@@ -112,6 +112,9 @@ fun ImageViewerDialog(
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(imageUrl)
+                        .apply { com.example.data.api.AuthenticatedMedia.headers(imageUrl).forEach { (name, value) -> addHeader(name, value) } }
+                        .memoryCacheKey("${com.example.data.api.ApiClient.activeWalletId}:$imageUrl")
+                        .diskCachePolicy(coil.request.CachePolicy.DISABLED)
                         .crossfade(true)
                         .build(),
                     contentDescription = fileName ?: "Image en plein écran",

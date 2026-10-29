@@ -1,6 +1,15 @@
 package com.example.ui.screens.reels
 
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import com.example.media.VideoExporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import android.widget.Toast
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -66,7 +75,13 @@ fun VideoEditorScreen(
     var trimStartRatio by remember { mutableFloatStateOf(0f) }
     var trimEndRatio by remember { mutableFloatStateOf(1f) }
     var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
-    val totalDurationSeconds = 8.0f
+    var totalDurationSeconds by remember { mutableFloatStateOf(0f) }
+    var previewSize by remember { mutableStateOf(IntSize(1, 1)) }
+    LaunchedEffect(mediaUri) {
+        try { totalDurationSeconds = VideoExporter.durationMs(context, Uri.parse(mediaUri)) / 1000f }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { Toast.makeText(context, "Impossible de lire la durée de la vidéo", Toast.LENGTH_LONG).show() }
+    }
     val currentDuration = (totalDurationSeconds * (trimEndRatio - trimStartRatio) / playbackSpeed)
 
     // 2. Audio & Sound
@@ -74,6 +89,11 @@ fun VideoEditorScreen(
     var audioVolume by remember { mutableFloatStateOf(1.0f) }
     var musicVolume by remember { mutableFloatStateOf(0.7f) }
     var selectedMusicTitle by remember { mutableStateOf("Son original") }
+    var selectedMusicUri by remember { mutableStateOf<Uri?>(null) }
+    val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        selectedMusicUri = uri
+        selectedMusicTitle = if (uri == null) "Son original" else "Fichier audio sélectionné"
+    }
 
     // 3. Text Overlays
     val textOverlays = remember { mutableStateListOf<TextOverlayItem>() }
@@ -115,43 +135,35 @@ fun VideoEditorScreen(
     var aiPrompt by remember { mutableStateOf("") }
     var isAiGenerating by remember { mutableStateOf(false) }
 
-    // Real upload progress when publishing to server
     LaunchedEffect(isPublishing) {
         if (isPublishing) {
-            uploadProgress = 0.15f
-            var finalUrl: String? = null
+            var exported: java.io.File? = null
             try {
-                uploadProgress = 0.35f
-                if (mediaUri.startsWith("content://") || mediaUri.startsWith("file://") || mediaUri.startsWith("android.resource://")) {
-                    val uri = Uri.parse(mediaUri)
-                    val mimeType = context.contentResolver.getType(uri) ?: if (mediaType == "video") "video/mp4" else "image/jpeg"
-                    val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                    uploadProgress = 0.65f
-                    if (bytes != null && viewModel != null) {
-                        val ext = if (mimeType.contains("video")) "mp4" else "jpg"
-                        val fileName = "reel_${System.currentTimeMillis()}.$ext"
-                        finalUrl = if (mimeType.contains("video") || mediaType == "video") {
-                            viewModel.uploadVideoGeneral(bytes, fileName, mimeType)
-                        } else {
-                            viewModel.uploadMediaBytes(bytes, fileName, mimeType)
-                        }
-                    }
-                } else if (mediaUri.startsWith("http")) {
-                    finalUrl = mediaUri
+                check(viewModel != null) { "Publication indisponible" }
+                check(totalDurationSeconds > 0) { "Durée de vidéo indisponible" }
+                val labels = textOverlays.map { label ->
+                    VideoExporter.Label(label.text, label.color.toArgb(), label.backgroundColor.toArgb(),
+                        2f * label.offsetX / previewSize.width, -2f * label.offsetY / previewSize.height)
+                }.toMutableList()
+                if (caption.isNotBlank()) labels.add(VideoExporter.Label(caption, android.graphics.Color.WHITE, 0x99000000.toInt(), 0f, -0.85f))
+                if (showSubtitles && subtitleText.isNotBlank()) {
+                    labels.add(VideoExporter.Label(subtitleText, android.graphics.Color.WHITE, 0x99000000.toInt(), 0f, -0.65f))
                 }
-                uploadProgress = 0.95f
+                val output = VideoExporter.export(context, Uri.parse(mediaUri), (totalDurationSeconds * 1000).toLong(),
+                    VideoExporter.Edits(trimStartRatio, trimEndRatio, playbackSpeed, audioVolume, isAudioMuted,
+                        selectedFilterName, labels, selectedMusicUri, musicVolume))
+                exported = output
+                check(output.length() in 1..(200L * 1024 * 1024)) { "La vidéo exportée dépasse 200 Mo" }
+                val bytes = withContext(Dispatchers.IO) { output.readBytes() }
+                val finalUrl = viewModel.uploadVideoGeneral(bytes, output.name, "video/mp4")
+                    ?: error("Échec de la publication au serveur")
+                onPublish(finalUrl, caption)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                android.util.Log.e("VideoEditorScreen", "Error uploading reel file: ${e.message}", e)
-            }
-            
-            if (finalUrl != null || mediaUri.startsWith("http")) {
-                uploadProgress = 1.0f
-                delay(350)
-                onPublish(finalUrl ?: mediaUri, caption)
-            } else {
                 isPublishing = false
-                Toast.makeText(context, "Échec de l'envoi vidéo au serveur. Vérifiez la connexion.", Toast.LENGTH_LONG).show()
-            }
+                Toast.makeText(context, e.message ?: "Échec de la publication", Toast.LENGTH_LONG).show()
+            } finally { exported?.delete() }
         }
     }
 
@@ -186,6 +198,7 @@ fun VideoEditorScreen(
                 // Publish Next Button
                 IconButton(
                     onClick = { isPublishing = true },
+                    enabled = !isPublishing && totalDurationSeconds > 0,
                     modifier = Modifier
                         .size(42.dp)
                         .clip(CircleShape)
@@ -206,7 +219,8 @@ fun VideoEditorScreen(
                     .weight(1f)
                     .padding(horizontal = 16.dp, vertical = 4.dp)
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF18181B)),
+                    .background(Color(0xFF18181B))
+                    .onSizeChanged { previewSize = it },
                 contentAlignment = Alignment.Center
             ) {
                 // Base Video or Image Preview
@@ -363,7 +377,7 @@ fun VideoEditorScreen(
             OutlinedTextField(
                 value = caption,
                 onValueChange = { caption = it },
-                placeholder = { Text("Écrire une légende avec #hashtags...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp) },
+                placeholder = { Text("Texte à afficher sur la vidéo...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
                     unfocusedTextColor = Color.White,
@@ -426,17 +440,12 @@ fun VideoEditorScreen(
                                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    listOf("Son original", "Afrobeat Mix", "Cinematic Bounce", "Future Chill").forEach { track ->
-                                        FilterChip(
-                                            selected = selectedMusicTitle == track,
-                                            onClick = { selectedMusicTitle = track },
-                                            label = { Text(track, fontSize = 11.sp) },
-                                            colors = FilterChipDefaults.filterChipColors(
-                                                selectedContainerColor = OnChatCyan,
-                                                selectedLabelColor = Color.Black
-                                            )
-                                        )
-                                    }
+                                    FilterChip(selected = selectedMusicUri == null,
+                                        onClick = { selectedMusicUri = null; selectedMusicTitle = "Son original" },
+                                        label = { Text("Son original") })
+                                    FilterChip(selected = selectedMusicUri != null,
+                                        onClick = { musicPicker.launch("audio/*") },
+                                        label = { Text("Choisir une musique") })
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Row(
@@ -702,7 +711,6 @@ fun VideoEditorScreen(
                     modifier = Modifier.padding(32.dp)
                 ) {
                     CircularProgressIndicator(
-                        progress = { uploadProgress },
                         modifier = Modifier.size(84.dp),
                         color = OnChatCyan,
                         trackColor = Color(0xFF3F3F46),
@@ -717,7 +725,7 @@ fun VideoEditorScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "${(uploadProgress * 100).toInt()}% • Traitement & Encodage MP4",
+                        text = "Export MP4 puis envoi au serveur",
                         color = OnChatCyan,
                         fontSize = 14.sp
                     )

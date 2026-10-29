@@ -297,7 +297,9 @@ fun ChatDetailScreen(
                     },
                     actions = {
                         IconButton(onClick = {
-                            viewModel.startCall(
+                            if (conv?.isGroup == true) {
+                                conversationId.removePrefix("g_").toLongOrNull()?.let { viewModel.createGroupMeeting(it, "audio") }
+                            } else viewModel.startCall(
                                 peerName = conv?.name ?: "Contact",
                                 peerWalletId = conv?.contactWalletId ?: "",
                                 peerAvatar = conv?.avatarUrl,
@@ -311,7 +313,9 @@ fun ChatDetailScreen(
                             )
                         }
                         IconButton(onClick = {
-                            viewModel.startCall(
+                            if (conv?.isGroup == true) {
+                                conversationId.removePrefix("g_").toLongOrNull()?.let { viewModel.createGroupMeeting(it, "video") }
+                            } else viewModel.startCall(
                                 peerName = conv?.name ?: "Contact",
                                 peerWalletId = conv?.contactWalletId ?: "",
                                 peerAvatar = conv?.avatarUrl,
@@ -1742,6 +1746,8 @@ fun MessageBubbleItem(
     onJoinMeeting: (meetCode: String) -> Unit = {},
     onLongPress: () -> Unit
 ) {
+    val attachmentContext = LocalContext.current
+    val attachmentScope = rememberCoroutineScope()
     val timeFormatted = remember(message.timestamp) {
         val sdf = SimpleDateFormat("HH:mm", Locale.getDefault())
         sdf.format(Date(message.timestamp))
@@ -2005,6 +2011,9 @@ fun MessageBubbleItem(
                                         AsyncImage(
                                             model = ImageRequest.Builder(LocalContext.current)
                                                 .data(resolvedImageUrl)
+                                                .apply { com.example.data.api.AuthenticatedMedia.headers(resolvedImageUrl.orEmpty()).forEach { (name, value) -> addHeader(name, value) } }
+                                                .memoryCacheKey("${com.example.data.api.ApiClient.activeWalletId}:$resolvedImageUrl")
+                                                .diskCachePolicy(coil.request.CachePolicy.DISABLED)
                                                 .crossfade(true)
                                                 .listener(
                                                     onStart = { isImgLoading = true; isImgError = false },
@@ -2032,7 +2041,13 @@ fun MessageBubbleItem(
                             } else if (message.type == "doc" || (!message.fileUrl.isNullOrBlank() && !isImageFile)) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(vertical = 4.dp)
+                                    modifier = Modifier.padding(vertical = 4.dp).clickable(enabled = !resolvedImageUrl.isNullOrBlank()) {
+                                        attachmentScope.launch {
+                                            try { com.example.media.AttachmentOpener.open(attachmentContext, resolvedImageUrl!!) }
+                                            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+                                            catch (e: Exception) { android.widget.Toast.makeText(attachmentContext, e.message ?: "Impossible d'ouvrir le fichier", android.widget.Toast.LENGTH_LONG).show() }
+                                        }
+                                    }
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -2085,9 +2100,24 @@ fun MessageBubbleItem(
                                 if (message.isMine) {
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Icon(
-                                        imageVector = Icons.Default.DoneAll,
-                                        contentDescription = "Délivré",
-                                        tint = OnChatCyan,
+                                        imageVector = when (message.status.lowercase()) {
+                                            "failed" -> Icons.Default.ErrorOutline
+                                            "sending" -> Icons.Default.Schedule
+                                            "read", "delivered" -> Icons.Default.DoneAll
+                                            else -> Icons.Default.Done
+                                        },
+                                        contentDescription = when (message.status.lowercase()) {
+                                            "failed" -> "Échec de l'envoi"
+                                            "sending" -> "Envoi en cours"
+                                            "read" -> "Lu"
+                                            "delivered" -> "Délivré"
+                                            else -> "Envoyé"
+                                        },
+                                        tint = when (message.status.lowercase()) {
+                                            "failed" -> Color.Red
+                                            "read" -> OnChatCyan
+                                            else -> Color.LightGray
+                                        },
                                         modifier = Modifier.size(15.dp)
                                     )
                                 }

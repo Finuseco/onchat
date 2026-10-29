@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
                 val isSessionChecking by viewModel.isSessionChecking.collectAsState()
                 val activeCall by viewModel.activeCall.collectAsState()
                 val activeMeeting by viewModel.activeMeeting.collectAsState()
+                val meetingUrl by viewModel.meetingWebUrl.collectAsState()
                 val incomingCall by viewModel.incomingCall.collectAsState()
                 val activeConversationId by viewModel.activeConversationId.collectAsState()
 
@@ -122,6 +123,9 @@ class MainActivity : ComponentActivity() {
                             callState = activeCall!!,
                             viewModel = viewModel
                         )
+                    }
+                    meetingUrl != null -> {
+                        com.example.ui.screens.meetings.MeetingWebScreen(url = meetingUrl!!, onClose = { viewModel.closeMeetingSurface() })
                     }
                     activeMeeting != null -> {
                         MeetingRoomScreen(

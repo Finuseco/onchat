@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Message
 import com.example.ui.theme.*
+import kotlinx.coroutines.isActive
 
 @Composable
 fun MeetingInviteBubble(
@@ -39,6 +40,20 @@ fun MeetingInviteBubble(
     onJoinMeeting: (String) -> Unit
 ) {
     val context = LocalContext.current
+    val manager = remember { com.example.data.api.OnChatWebSocketManager.getInstance() }
+    val states by manager.meetingStates.collectAsState()
+    var fallback by remember(meetCode) { mutableStateOf<com.example.data.model.MeetingStatusResponse?>(null) }
+    val connection by manager.connectionStatus.collectAsState()
+    val state = if (fallback?.status == "ended") fallback else states[meetCode]?.takeIf { connection == com.example.data.api.WsConnectionStatus.CONNECTED } ?: fallback
+    DisposableEffect(meetCode) { manager.watchMeeting(meetCode); onDispose { manager.unwatchMeeting(meetCode) } }
+    LaunchedEffect(meetCode) {
+        while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+            try { val response = com.example.data.api.ApiClient.apiService.getMeetingStatus(meetCode); if (response.isSuccessful && response.body()?.success == true) fallback = response.body() }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { }
+            kotlinx.coroutines.delay(15000)
+        }
+    }
     val isVideo = message.content.contains("vidéo", ignoreCase = true) ||
             message.content.contains("video", ignoreCase = true) ||
             message.content.contains("🎥")
@@ -135,7 +150,7 @@ fun MeetingInviteBubble(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "EN COURS",
+                            text = when (state?.status) { "active" -> "EN DIRECT"; "ended" -> "TERMINÉE"; else -> "À VÉRIFIER" },
                             color = Color(0xFFFF5252),
                             fontSize = 10.sp,
                             fontWeight = FontWeight.ExtraBold
@@ -198,6 +213,7 @@ fun MeetingInviteBubble(
             // Primary Action: "Rejoindre l'appel / la réunion" Button
             Button(
                 onClick = { onJoinMeeting(meetCode) },
+                enabled = state?.status != "ended",
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isVideo) OnChatCyan else Color(0xFF25D366)
                 ),
@@ -215,7 +231,7 @@ fun MeetingInviteBubble(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (isVideo) "Rejoindre l'appel vidéo" else "Rejoindre l'appel audio",
+                        text = "Voir les conditions et rejoindre",
                         color = if (isVideo) CashPayNavyDark else Color.White,
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
