@@ -5,7 +5,7 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class VideoUploadResponse(
-    @Json(name = "success") val success: Boolean = true,
+    @Json(name = "success") val success: Boolean = false,
     @Json(name = "message") val message: String? = null,
     @Json(name = "error") val error: String? = null,
     @Json(name = "video") val video: VideoItem? = null,
@@ -14,20 +14,20 @@ data class VideoUploadResponse(
 
 @JsonClass(generateAdapter = true)
 data class VideoListResponse(
-    @Json(name = "success") val success: Boolean = true,
+    @Json(name = "success") val success: Boolean = false,
     @Json(name = "videos") val videos: List<VideoItem> = emptyList(),
     @Json(name = "total") val total: Int? = 0
 )
 
 @JsonClass(generateAdapter = true)
 data class VideoDetailResponse(
-    @Json(name = "success") val success: Boolean = true,
+    @Json(name = "success") val success: Boolean = false,
     @Json(name = "video") val video: VideoItem? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class VideoLikeResponse(
-    @Json(name = "success") val success: Boolean = true,
+    @Json(name = "success") val success: Boolean = false,
     @Json(name = "liked") val liked: Boolean? = false,
     @Json(name = "likes") val likes: Int? = 0,
     @Json(name = "message") val message: String? = null
@@ -35,7 +35,7 @@ data class VideoLikeResponse(
 
 @JsonClass(generateAdapter = true)
 data class VideoCommentsResponse(
-    @Json(name = "success") val success: Boolean = true,
+    @Json(name = "success") val success: Boolean = false,
     @Json(name = "comments") val comments: List<VideoCommentItem> = emptyList(),
     @Json(name = "total") val total: Int? = 0
 )
@@ -47,13 +47,14 @@ data class PostVideoCommentRequest(
 
 @JsonClass(generateAdapter = true)
 data class PostVideoCommentResponse(
-    @Json(name = "success") val success: Boolean = true,
+    @Json(name = "success") val success: Boolean = false,
     @Json(name = "comment") val comment: VideoCommentItem? = null,
     @Json(name = "message") val message: String? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class VideoPublisher(
+    @Json(name = "type") val type: String? = null,
     @Json(name = "id") val id: Long? = null,
     @Json(name = "ownerId") val ownerId: Long? = null,
     @Json(name = "name") val name: String? = null,

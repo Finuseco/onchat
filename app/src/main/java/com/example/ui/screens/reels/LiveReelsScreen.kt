@@ -64,16 +64,20 @@ fun LiveReelsScreen(
         viewModel.fetchVideosFeed()
     }
 
-    val validVideos = remember(realVideos) {
-        realVideos.filter { it.resolvedUrl.isNotBlank() }
+    var selectedTab by remember { mutableIntStateOf(2) }
+    val validVideos = remember(realVideos, selectedTab) {
+        realVideos.filter { it.resolvedUrl.isNotBlank() && (selectedTab != 1 || it.follow?.isFollowing == true) }
     }
     val pagerState = rememberPagerState(pageCount = { validVideos.size.coerceAtLeast(1) })
-    var selectedTab by remember { mutableIntStateOf(2) } // 0: Explorer, 1: Suivis, 2: Pour toi
+    LaunchedEffect(pagerState.settledPage, validVideos.size, selectedTab) {
+        if (realVideos.isNotEmpty() && pagerState.settledPage >= validVideos.size - 4) viewModel.loadMoreVideos()
+    }
     var showCaptureScreen by remember { mutableStateOf(false) }
     var editingMediaUri by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, type)
 
     // Modals
     var activeCommentsVideo by remember { mutableStateOf<VideoItem?>(null) }
+    var reusedSound by remember { mutableStateOf<com.example.data.model.ReusableSound?>(null) }
     var activeSoundVideo by remember { mutableStateOf<VideoItem?>(null) }
     var activeProfileVideo by remember { mutableStateOf<VideoItem?>(null) }
 
@@ -89,10 +93,12 @@ fun LiveReelsScreen(
         VideoEditorScreen(
             mediaUri = editingMediaUri!!.first,
             mediaType = editingMediaUri!!.second,
+            reusedSound = reusedSound,
             viewModel = viewModel,
-            onBack = { editingMediaUri = null },
+            onBack = { editingMediaUri = null; reusedSound = null },
             onPublish = { uploadedUrl, caption ->
                 editingMediaUri = null
+                reusedSound = null
                 viewModel.fetchVideosFeed()
                 Toast.makeText(context, "Vidéo publiée sur OnChat Shorts ! 🚀", Toast.LENGTH_SHORT).show()
             }
@@ -173,6 +179,7 @@ fun LiveReelsScreen(
                         val video = validVideos[page]
                         ReelItemView(
                             video = video,
+                            active = page == pagerState.settledPage,
                             viewModel = viewModel,
                             session = session,
                             onOpenComments = { activeCommentsVideo = video },
@@ -287,13 +294,15 @@ fun LiveReelsScreen(
             activeSoundVideo?.let { currentSoundVideo ->
                 ReelSoundBottomSheet(
                     video = currentSoundVideo,
+                    viewModel = viewModel,
                     onDismiss = { activeSoundVideo = null },
-                    onUseSound = {
+                    onUseSound = { sound ->
+                        reusedSound = sound
                         activeSoundVideo = null
                         showCaptureScreen = true
                     },
-                    onViewAuthorProfile = {
-                        val authorVideo = currentSoundVideo
+                    onViewAuthorProfile = { authorSound ->
+                        val authorVideo = if (authorSound != null) currentSoundVideo.copy(id = authorSound.sourceId, url = authorSound.url, videoUrl = null, content = "", description = null, caption = null, publisher = com.example.data.model.VideoPublisher(id = authorSound.authorId, type = "user", name = authorSound.authorName, avatarUrl = authorSound.authorAvatar)) else currentSoundVideo
                         activeSoundVideo = null
                         activeProfileVideo = authorVideo
                     }
@@ -317,6 +326,7 @@ fun LiveReelsScreen(
 @Composable
 fun ReelItemView(
     video: VideoItem,
+    active: Boolean = true,
     viewModel: OnChatViewModel,
     session: UserSessionEntity?,
     onOpenComments: () -> Unit,
@@ -324,9 +334,9 @@ fun ReelItemView(
     onOpenProfile: () -> Unit
 ) {
     val context = LocalContext.current
-    var isLiked by remember(video) { mutableStateOf(video.interactions?.realIsLiked == true) }
-    var likesCount by remember(video) { mutableIntStateOf(video.interactions?.realLikesCount ?: 0) }
-    var commentsCount by remember(video) { mutableIntStateOf(video.interactions?.comments ?: 0) }
+    val isLiked = video.interactions?.realIsLiked == true
+    val likesCount = video.interactions?.realLikesCount ?: 0
+    val commentsCount = video.interactions?.comments ?: 0
     var isBookmarked by remember { mutableStateOf(false) }
     var isFollowing by remember(video) { mutableStateOf(video.follow?.isFollowing == true) }
 
@@ -339,6 +349,7 @@ fun ReelItemView(
         if (video.resolvedUrl.isNotBlank()) {
             StatusVideoPlayer(
                 videoUrl = video.resolvedUrl,
+                isPaused = !active,
                 modifier = Modifier.fillMaxSize()
             )
         } else {
@@ -397,18 +408,10 @@ fun ReelItemView(
                         .clip(CircleShape)
                         .background(if (isFollowing) OnChatCyan else Color(0xFFE11D48))
                         .clickable {
-                            isFollowing = !isFollowing
-                            if (creatorId > 0) {
-                                viewModel.performSocialAction(
-                                    creatorId,
-                                    if (isFollowing) "follow" else "unfollow"
-                                )
+                            if (creatorId > 0 && video.publisher?.type == "user") {
+                                val next = !isFollowing
+                                viewModel.performSocialAction(creatorId, if (next) "follow" else "unfollow", onComplete = { success -> if (success) isFollowing = next })
                             }
-                            Toast.makeText(
-                                context,
-                                if (isFollowing) "Abonné à @$creatorName ✅" else "Désabonné",
-                                Toast.LENGTH_SHORT
-                            ).show()
                         },
                     contentAlignment = Alignment.Center
                 ) {
@@ -427,10 +430,7 @@ fun ReelItemView(
                 label = formatCount(likesCount),
                 iconColor = if (isLiked) Color.Red else Color.White,
                 onClick = {
-                    val newLikeState = !isLiked
-                    isLiked = newLikeState
-                    if (newLikeState) likesCount++ else if (likesCount > 0) likesCount--
-                    viewModel.toggleVideoLike(video.id, !newLikeState)
+                    viewModel.toggleVideoLike(video.id, isLiked)
                 }
             )
 
@@ -790,11 +790,20 @@ fun ReelsCommentsSheet(
 fun ReelSoundBottomSheet(
     video: VideoItem,
     onDismiss: () -> Unit,
-    onUseSound: () -> Unit,
-    onViewAuthorProfile: () -> Unit
+    onUseSound: (com.example.data.model.ReusableSound) -> Unit,
+    viewModel: OnChatViewModel,
+    onViewAuthorProfile: (com.example.data.model.ReusableSound?) -> Unit
 ) {
     val context = LocalContext.current
-    val authorName = video.publisher?.resolvedName ?: "Créateur OnChat"
+    var sound by remember(video.id) { mutableStateOf<com.example.data.model.ReusableSound?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var soundError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(video.id) {
+        try { sound = viewModel.reusableSound(video.id) }
+        catch (error: Exception) { soundError = error.message }
+        finally { loading = false }
+    }
+    val authorName = sound?.authorName ?: video.publisher?.resolvedName ?: "Créateur OnChat"
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -808,7 +817,7 @@ fun ReelSoundBottomSheet(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             MusicDiscAnimation(
-                avatarUrl = video.publisher?.resolvedAvatar,
+                avatarUrl = sound?.authorAvatar ?: video.publisher?.resolvedAvatar,
                 userName = authorName,
                 onClick = {}
             )
@@ -816,14 +825,14 @@ fun ReelSoundBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "Son original - $authorName",
+                text = sound?.let { "${it.title} • ${it.authorName}" } ?: "Son de $authorName",
                 fontWeight = FontWeight.Bold,
                 fontSize = 18.sp,
                 color = Color.White
             )
 
             Text(
-                text = "Créateur certifié OnChat",
+                text = if (loading) "Chargement des droits…" else if (sound?.allowReuse == true) "Réutilisation autorisée avec crédit à l’auteur" else soundError ?: "Réutilisation non autorisée par l’auteur",
                 fontSize = 13.sp,
                 color = OnChatCyan
             )
@@ -832,7 +841,8 @@ fun ReelSoundBottomSheet(
 
             // Action Buttons
             Button(
-                onClick = onUseSound,
+                onClick = { sound?.takeIf { it.allowReuse }?.let(onUseSound) },
+                enabled = sound?.allowReuse == true && !loading,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = OnChatMagenta),
                 shape = RoundedCornerShape(12.dp)
@@ -846,7 +856,8 @@ fun ReelSoundBottomSheet(
 
             OutlinedButton(
                 onClick = {
-                    Toast.makeText(context, "Audio extrait et enregistré 🎧", Toast.LENGTH_SHORT).show()
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(android.content.Intent.EXTRA_TEXT, "${sound?.title ?: "Vidéo OnChat"} • $authorName\n${video.resolvedUrl}") }
+                    context.startActivity(android.content.Intent.createChooser(send, "Partager la vidéo et son auteur"))
                 },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -854,13 +865,13 @@ fun ReelSoundBottomSheet(
             ) {
                 Icon(Icons.Default.Download, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Télécharger l'audio seul")
+                Text("Partager la vidéo et son auteur")
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
             TextButton(
-                onClick = onViewAuthorProfile,
+                onClick = { onViewAuthorProfile(sound) },
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Voir le profil de l'auteur (@$authorName)", color = Color.White.copy(alpha = 0.8f))
@@ -1000,9 +1011,9 @@ fun ReelsUserProfileDialog(
                     // Follow Button
                     Button(
                         onClick = {
-                            isFollowing = !isFollowing
-                            if (creatorId > 0) {
-                                viewModel.performSocialAction(creatorId, if (isFollowing) "follow" else "unfollow")
+                            if (creatorId > 0 && video.publisher?.type == "user") {
+                                val next = !isFollowing
+                                viewModel.performSocialAction(creatorId, if (next) "follow" else "unfollow", onComplete = { success -> if (success) isFollowing = next })
                             }
                         },
                         modifier = Modifier

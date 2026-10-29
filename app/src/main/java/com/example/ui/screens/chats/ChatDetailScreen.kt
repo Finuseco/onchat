@@ -1,5 +1,10 @@
 package com.example.ui.screens.chats
 
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+
+import com.example.data.model.assetBalance
+
 import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
@@ -764,11 +769,7 @@ fun ChatDetailScreen(
         }
 
         // Available balance for the selected currency from authenticated wallet API
-        val realBalance = when (transferCurrency.uppercase()) {
-            "BTC" -> walletData?.crypto?.find { it.currency.equals("BTC", ignoreCase = true) }?.balance
-                ?: walletData?.balances?.crypto?.find { it.currency.equals("BTC", ignoreCase = true) }?.balance ?: 0.0
-            else -> walletData?.balances?.fiat?.get(transferCurrency) ?: 0.0
-        }
+        val realBalance = walletData?.assetBalance(transferCurrency) ?: 0.0
 
         AlertDialog(
             onDismissRequest = {
@@ -872,64 +873,10 @@ fun ChatDetailScreen(
                     when (transferStep) {
                         1 -> {
                             // Destinataire Bitcoin ou Wallet ID avec option de saisie / collage
-                            if (transferCurrency.equals("BTC", ignoreCase = true)) {
-                                Text("Adresse Bitcoin destinataire :", color = CashPayGrey, fontSize = 12.sp)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                OutlinedTextField(
-                                    value = recipientBtcAddress ?: "",
-                                    onValueChange = { recipientBtcAddress = it.trim() },
-                                    placeholder = { Text("Adresse BTC ou Wallet ID...", color = CashPayGrey, fontSize = 12.sp) },
-                                    singleLine = true,
-                                    trailingIcon = {
-                                        TextButton(onClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                            val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString()
-                                            if (!clip.isNullOrBlank()) {
-                                                recipientBtcAddress = clip.trim()
-                                            }
-                                        }) {
-                                            Text("Coller", color = OnChatCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    },
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedBorderColor = OnChatCyan,
-                                        unfocusedBorderColor = CashPayNavyBorder,
-                                        cursorColor = OnChatCyan
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                            } else if (recipientWalletId.isNullOrBlank()) {
-                                Text("Wallet ID du destinataire :", color = CashPayGrey, fontSize = 12.sp)
-                                Spacer(modifier = Modifier.height(4.dp))
-                                OutlinedTextField(
-                                    value = recipientWalletId ?: "",
-                                    onValueChange = { recipientWalletId = it.trim() },
-                                    placeholder = { Text("Ex: CD0100000000", color = CashPayGrey, fontSize = 12.sp) },
-                                    singleLine = true,
-                                    trailingIcon = {
-                                        TextButton(onClick = {
-                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                                            val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString()
-                                            if (!clip.isNullOrBlank()) {
-                                                recipientWalletId = clip.trim()
-                                            }
-                                        }) {
-                                            Text("Coller", color = OnChatCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    },
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedTextColor = Color.White,
-                                        unfocusedTextColor = Color.White,
-                                        focusedBorderColor = OnChatCyan,
-                                        unfocusedBorderColor = CashPayNavyBorder,
-                                        cursorColor = OnChatCyan
-                                    ),
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
+                            if (transferCurrency.uppercase() in setOf("BTC", "USDT")) {
+                                Text("L’adresse ${transferCurrency} est vérifiée sur le compte CashPay de ce contact avant confirmation.", color = CashPayGrey, fontSize = 12.sp)
+                            } else {
+                                Text("Le destinataire est le correspondant de cette conversation, vérifié par CashPay.", color = CashPayGrey, fontSize = 12.sp)
                             }
 
                             // --- Étape 1 : Saisie ---
@@ -937,7 +884,7 @@ fun ChatDetailScreen(
                             Spacer(modifier = Modifier.height(6.dp))
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                             ) {
                                 val availableCurrencies = remember(walletData) {
                                     val list = mutableListOf<String>()
@@ -946,6 +893,7 @@ fun ChatDetailScreen(
                                     if (!list.contains("USD")) list.add("USD")
                                     if (!list.contains("EUR")) list.add("EUR")
                                     if (!list.contains("BTC")) list.add("BTC")
+                                    if (!list.contains("USDT")) list.add("USDT")
                                     list
                                 }
                                 availableCurrencies.forEach { curr ->
@@ -1463,16 +1411,9 @@ fun ChatDetailScreen(
                                 }
                                 val targetWallet = (recipientWalletId ?: conv?.contactWalletId)?.takeIf { it.isNotBlank() }
                                 val targetBtc = (recipientBtcAddress ?: conv?.contactBitcoinAddress)?.takeIf { it.isNotBlank() }
-                                if (transferCurrency.equals("BTC", ignoreCase = true)) {
-                                    if (targetBtc.isNullOrBlank() && targetWallet.isNullOrBlank()) {
-                                        transferErrorMessage = "Veuillez renseigner l'adresse Bitcoin ou le Wallet ID du destinataire."
-                                        return@Button
-                                    }
-                                } else {
-                                    if (targetWallet.isNullOrBlank()) {
-                                        transferErrorMessage = "Le Wallet ID du destinataire est requis."
-                                        return@Button
-                                    }
+                                if (conversationId.startsWith("g_")) {
+                                    transferErrorMessage = "Le transfert est réservé à une conversation personnelle."
+                                    return@Button
                                 }
                                 coroutineScope.launch {
                                     isTransferLoading = true

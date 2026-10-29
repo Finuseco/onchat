@@ -78,6 +78,7 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    implementation("androidx.camera:camera-video:1.5.0")
 
     // Retrofit & OkHttp
     implementation(libs.retrofit)

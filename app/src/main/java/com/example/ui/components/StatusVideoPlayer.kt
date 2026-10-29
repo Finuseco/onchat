@@ -47,9 +47,12 @@ fun StatusVideoPlayer(
     modifier: Modifier = Modifier,
     isPaused: Boolean = false,
     showWatermark: Boolean = true,
+    onPosition: (Long) -> Unit = {},
     onVideoEnded: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val positionCallback by rememberUpdatedState(onPosition)
     var localIsPaused by remember { mutableStateOf(isPaused) }
     var duration by remember { mutableLongStateOf(0L) }
     var currentPosition by remember { mutableLongStateOf(0L) }
@@ -88,6 +91,7 @@ fun StatusVideoPlayer(
             delay(50)
             if (exoPlayer.isPlaying) {
                 currentPosition = exoPlayer.currentPosition
+                positionCallback(currentPosition)
                 duration = exoPlayer.duration
             }
         }
@@ -109,6 +113,18 @@ fun StatusVideoPlayer(
             exoPlayer.removeListener(listener)
             exoPlayer.release()
         }
+    }
+
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> exoPlayer.pause()
+                androidx.lifecycle.Lifecycle.Event.ON_START -> if (!localIsPaused) exoPlayer.play()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // Interactive Full Screen Box

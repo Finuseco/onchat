@@ -63,7 +63,7 @@ interface MessageDao {
     @Query("UPDATE messages SET content = :content, isEdited = 1 WHERE id = :messageId")
     suspend fun updateMessageContent(messageId: String, content: String)
 
-    @Query("UPDATE messages SET status = 'read' WHERE conversationId = :conversationId AND isMine = 1 AND status NOT IN ('failed', 'sending')")
+    @Query("UPDATE messages SET status = 'read' WHERE conversationId = :conversationId AND isMine = 1 AND status NOT IN ('failed', 'sending', 'receipt_pending')")
     suspend fun markOutgoingMessagesAsRead(conversationId: String)
 
     @Query("UPDATE messages SET status = 'READ' WHERE id = :messageId")
@@ -101,6 +101,14 @@ interface GroupDao {
 
 @Dao
 interface StatusDao {
+    @Query("DELETE FROM statuses")
+    suspend fun clearSyncedStatuses()
+    @androidx.room.Transaction
+    suspend fun replaceSyncedStatuses(statuses: List<StatusEntity>) {
+        clearSyncedStatuses()
+        if (statuses.isNotEmpty()) insertStatuses(statuses)
+    }
+
     @Query("SELECT * FROM statuses WHERE expiresAt > :now ORDER BY timestamp DESC")
     fun getStatusesFlow(now: Long = System.currentTimeMillis()): Flow<List<StatusEntity>>
 

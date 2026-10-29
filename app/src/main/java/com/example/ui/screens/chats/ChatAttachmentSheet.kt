@@ -1,5 +1,7 @@
 package com.example.ui.screens.chats
 
+import com.example.data.model.assetBalance
+
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -715,14 +717,14 @@ fun WalletAttachmentView(
     val eurFormatted = String.format(Locale.US, "€ %,.2f", eurBalance)
 
     // Bitcoin
-    val btcBalance = walletData?.crypto?.find { it.currency.equals("BTC", ignoreCase = true) }?.balance
-        ?: walletData?.balances?.crypto?.find { it.currency.equals("BTC", ignoreCase = true) }?.balance
-        ?: 0.0
+    val btcBalance = walletData?.assetBalance("BTC") ?: 0.0
+    val usdtBalance = walletData?.assetBalance("USDT") ?: 0.0
+    val usdtAddress = walletData?.usdt?.address.orEmpty()
     val btcAddress = walletData?.bitcoin?.address ?: ""
     val btcFormatted = String.format(Locale.US, "%.8f BTC", btcBalance)
     val btcSubtitle = if (btcAddress.isNotBlank()) "Adresse: ${btcAddress.take(8)}...${btcAddress.takeLast(6)}" else "Adresse Bitcoin non activée"
 
-    val cards = remember(walletData, natCode, natName, natSymbol, natBalance, usdBalance, eurBalance, btcBalance) {
+    val cards = remember(walletData, natCode, natName, natSymbol, natBalance, usdBalance, eurBalance, btcBalance, usdtBalance) {
         listOf(
             CarouselCardData(
                 id = "national",
@@ -763,6 +765,12 @@ fun WalletAttachmentView(
                 linkedCard = null,
                 gradientBrush = Brush.linearGradient(listOf(Color(0xFF1C1506), Color(0xFF3B2A0A))),
                 accentColor = Color(0xFFF7931A)
+            ),
+            CarouselCardData(
+                id = "usdt", typeTitle = "CRYPTO CASHPAY • TRC20", currencyCode = "USDT",
+                balanceText = String.format(Locale.US, "%.6f USDT", usdtBalance),
+                subtitleText = if (usdtAddress.isBlank()) "Adresse USDT TRC20 non activée" else "TRC20 • ${usdtAddress.take(8)}…${usdtAddress.takeLast(6)}",
+                linkedCard = null, gradientBrush = Brush.linearGradient(listOf(Color(0xFF073D35), Color(0xFF126D5A))), accentColor = Color(0xFF26A17B)
             )
         )
     }
@@ -1147,6 +1155,7 @@ fun WalletAttachmentView(
                 "USD" -> listOf("M-Pesa USD", "Airtel Money USD", "Orange Money USD", "Carte Visa / Mastercard")
                 "EUR" -> listOf("Carte Visa / Mastercard", "Virement Bancaire SEPA")
                 "BTC" -> listOf("Dépôt Réseau Bitcoin (BTC)")
+                "USDT" -> listOf("Dépôt réseau TRON (USDT TRC20)")
                 else -> listOf("Mobile Money", "Carte Bancaire")
             }
         }
@@ -1204,8 +1213,8 @@ fun WalletAttachmentView(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    if (currentCard.currencyCode == "BTC") {
-                        Text("Adresse de dépôt Bitcoin (CashPay) :", color = CashPayGrey, fontSize = 12.sp)
+                    if (currentCard.currencyCode in setOf("BTC", "USDT")) {
+                        Text(if (currentCard.currencyCode == "USDT") "Adresse USDT TRC20 (réseau TRON uniquement) :" else "Adresse Bitcoin (réseau Bitcoin uniquement) :", color = CashPayGrey, fontSize = 12.sp)
                         Spacer(modifier = Modifier.height(4.dp))
                         Card(
                             shape = RoundedCornerShape(8.dp),
@@ -1213,7 +1222,7 @@ fun WalletAttachmentView(
                             border = BorderStroke(1.dp, CashPayNavyBorder)
                         ) {
                             Text(
-                                text = btcAddress.ifBlank { "bc1q9cashpaybitcoinaddressonchat2026" },
+                                text = (if (currentCard.currencyCode == "USDT") usdtAddress else btcAddress).ifBlank { "Adresse non activée" },
                                 color = OnChatCyan,
                                 fontSize = 11.sp,
                                 fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
@@ -1256,13 +1265,21 @@ fun WalletAttachmentView(
             confirmButton = {
                 Button(
                     onClick = {
-                        Toast.makeText(context, "Dépôt de $depositAmount ${currentCard.currencyCode} initié via $selectedDepositProvider !", Toast.LENGTH_LONG).show()
+                        if (currentCard.currencyCode in setOf("BTC", "USDT")) {
+                            val address = if (currentCard.currencyCode == "USDT") usdtAddress else btcAddress
+                            if (address.isNotBlank()) {
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Adresse ${currentCard.currencyCode}", address))
+                                Toast.makeText(context, "Adresse copiée. Utilisez uniquement le réseau indiqué.", Toast.LENGTH_LONG).show()
+                            }
+                        } else {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://app.cashpay-all.com/deposit")))
+                        }
                         showDepositDialog = false
-                        onRefreshWallet()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = currentCard.accentColor)
                 ) {
-                    Text("Confirmer le rechargement", color = CashPayNavyDark, fontWeight = FontWeight.Bold)
+                    Text(if (currentCard.currencyCode in setOf("BTC", "USDT")) "Copier l’adresse de dépôt" else "Continuer dans CashPay", color = CashPayNavyDark, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
