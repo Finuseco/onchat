@@ -672,6 +672,7 @@ class OnChatRepository(private val context: Context) {
             val response = ApiClient.apiService.getWallet()
             if (response.isSuccessful && response.body() != null) {
                 val data = response.body()!!
+                if (!data.success) return@withContext null
                 // Synchronize session profile if wallet response contains updated user/wallet details
                 val current = session
                 val updatedWalletId = data.wallet?.walletId ?: data.user?.walletId ?: current.walletId
@@ -1058,6 +1059,9 @@ class OnChatRepository(private val context: Context) {
     }
 
     suspend fun fetchConversationDetails(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        messageDao.getMessagesFlow(conversationId).firstOrNull().orEmpty()
+            .filter { it.status == "receipt_pending" && !it.transferReference.isNullOrBlank() }.take(20)
+            .forEach { syncTransferReceipt(conversationId, it.transferReference!!, it.id) }
         if (conversationId.startsWith("g_")) {
             val groupId = conversationId.removePrefix("g_").toLongOrNull()
                 ?: return@withContext Result.failure(IllegalArgumentException("Groupe invalide"))
@@ -1600,32 +1604,33 @@ class OnChatRepository(private val context: Context) {
         receiverWalletId: String?,
         recipientAddress: String?,
         amount: Double,
-        currency: String
+        currency: String,
+        conversationId: String? = null
     ): Result<TransferResponse> = withContext(Dispatchers.IO) {
         val session = sessionDao.getSession() ?: return@withContext Result.failure(Exception("Non connecté"))
 
-        val isBtc = currency.equals("BTC", ignoreCase = true)
-        val targetWallet = receiverWalletId?.takeIf { it.isNotBlank() }
-        val targetBtc = (recipientAddress ?: receiverWalletId)?.takeIf { it.isNotBlank() }
-
-        val req = TransferRequest(
-            receiverWalletId = if (!isBtc) targetWallet else (targetWallet ?: targetBtc),
-            recipientAddress = if (isBtc) (targetBtc ?: targetWallet) else null,
-            amount = amount,
-            currency = currency,
-            pin = null,
-            preview = true
-        )
+        if (!amount.isFinite() || amount <= 0) return@withContext Result.failure(Exception("Montant invalide"))
+        val isCrypto = currency.uppercase() in setOf("BTC", "USDT")
+        val req = TransferRequest(receiverWalletId = receiverWalletId, amount = amount, currency = currency, preview = true)
+        if (isCrypto && conversationId.isNullOrBlank()) return@withContext Result.failure(Exception("Une conversation personnelle est requise pour ce transfert crypto."))
 
         try {
-            val response = ApiClient.apiService.executeGlobalTransfer(req)
-            if (response.isSuccessful && response.body() != null) {
+            if (!isCrypto && !conversationId.isNullOrBlank()) {
+                val response = ApiClient.apiService.quoteTransfer(conversationId, TransferQuoteRequest(amount, currency))
+                val quote = response.body()
+                if (!response.isSuccessful || quote?.success != true || quote.totalDebit == null) error(quote?.error ?: "Devis du transfert indisponible")
+                val wallet = fetchWallet() ?: error("Solde indisponible")
+                check(wallet.assetBalance(currency) >= quote.totalDebit) { "Solde insuffisant (montant + frais)." }
+                return@withContext Result.success(TransferResponse(success = true, amount = quote.amount ?: amount, currency = quote.currency ?: currency, fee = quote.totalDebit - amount, totalDebit = quote.totalDebit))
+            }
+            val response = if (isCrypto) ApiClient.apiService.quoteCryptoTransfer(conversationId!!, TransferQuoteRequest(amount, currency)) else ApiClient.apiService.executeGlobalTransfer(req)
+            if (response.isSuccessful && response.body()?.success == true) {
                 Result.success(response.body()!!)
             } else {
                 val errBody = response.errorBody()?.string() ?: ""
                 val parsed = parseTransferResponseJson(errBody)
                 if (parsed != null) {
-                    Result.success(parsed)
+                    Result.failure(Exception(parsed.error ?: parsed.message ?: "Devis refusé"))
                 } else {
                     Result.failure(Exception(if (errBody.isNotBlank()) errBody else "Erreur de prévisualisation"))
                 }
@@ -1633,6 +1638,18 @@ class OnChatRepository(private val context: Context) {
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private suspend fun syncTransferReceipt(conversationId: String, reference: String, localId: String) {
+        if (reference.isBlank()) return
+        try {
+            val response = ApiClient.apiService.publishTransferReceipt(conversationId, mapOf("reference" to reference))
+            val receipt = response.body()?.message
+            if (response.isSuccessful && response.body()?.success == true && receipt != null) {
+                messageDao.deleteMessage(localId)
+                insertWebSocketMessage(conversationId, receipt)
+            }
+        } catch (_: Exception) { /* The payment is already final; retry only receipt synchronization. */ }
     }
 
     suspend fun executeInChatTransfer(
@@ -1646,34 +1663,29 @@ class OnChatRepository(private val context: Context) {
         val session = sessionDao.getSession() ?: return@withContext Result.failure(Exception("Non connecté"))
         val conv = conversationDao.getConversationSync(conversationId)
 
-        var targetWalletId = receiverWalletId ?: conv?.contactWalletId
-        var targetBtcAddress = if (currency.equals("BTC", ignoreCase = true)) (recipientAddress ?: conv?.contactBitcoinAddress) else null
-
-        // If data is missing, attempt one last phone sync
-        if ((!currency.equals("BTC", ignoreCase = true) && targetWalletId.isNullOrBlank()) ||
-            (currency.equals("BTC", ignoreCase = true) && targetBtcAddress.isNullOrBlank())) {
-            conv?.contactPhone?.let { phone ->
-                val search = searchProfileByPhone(phone).getOrNull()
-                if (search != null) {
-                    if (targetWalletId.isNullOrBlank()) targetWalletId = search.walletId
-                    if (targetBtcAddress.isNullOrBlank()) targetBtcAddress = search.bitcoinAddress
-                }
-            }
-        }
-
-        if (currency.equals("BTC", ignoreCase = true) && targetBtcAddress.isNullOrBlank() && targetWalletId.isNullOrBlank()) {
-            return@withContext Result.failure(Exception("Adresse Bitcoin destinataire manquante"))
-        }
-        if (!currency.equals("BTC", ignoreCase = true) && targetWalletId.isNullOrBlank()) {
-            return@withContext Result.failure(Exception("Wallet ID destinataire manquant"))
-        }
+        val isCrypto = currency.uppercase() in setOf("BTC", "USDT")
+        val targetWalletId = receiverWalletId ?: conv?.contactWalletId
+        if (!amount.isFinite() || amount <= 0) return@withContext Result.failure(Exception("Montant invalide"))
+        // Resolve the canonical peer address from the authenticated chat; a wallet ID is never a blockchain address.
+        val cryptoQuote = if (isCrypto) previewTransfer(targetWalletId, recipientAddress, amount, currency, conversationId).getOrElse { return@withContext Result.failure(it) } else null
 
         try {
+            if (!isCrypto) {
+                val response = ApiClient.apiService.executeTransfer(conversationId, TransferExecuteRequest(amount, currency, pin))
+                val data = response.body()
+                if (!response.isSuccessful || data?.success != true || data.transaction == null) {
+                    val details = response.errorBody()?.string()?.let { runCatching { org.json.JSONObject(it).optString("error") }.getOrNull() }
+                    error(details?.takeIf { it.isNotBlank() } ?: data?.error ?: "Le transfert n’a pas été confirmé.")
+                }
+                data.message?.let { insertWebSocketMessage(conversationId, it) }
+                fetchWallet()
+                return@withContext Result.success(TransferResponse(success = true, transaction = data.transaction, amount = data.transaction.amount, fee = data.transaction.fee, currency = data.transaction.currency, reference = data.transaction.reference))
+            }
             // Confirmation with PIN -> Real transaction creation
             val response = ApiClient.apiService.executeGlobalTransfer(
                 TransferRequest(
-                    receiverWalletId = if (!currency.equals("BTC", ignoreCase = true)) targetWalletId else null,
-                    recipientAddress = if (currency.equals("BTC", ignoreCase = true)) (targetBtcAddress ?: targetWalletId) else null,
+                    receiverWalletId = if (!isCrypto) targetWalletId else null,
+                    recipientAddress = if (isCrypto) cryptoQuote?.recipientAddress else null,
                     amount = amount,
                     currency = currency,
                     pin = pin,
@@ -1689,7 +1701,7 @@ class OnChatRepository(private val context: Context) {
 
                     // Insert message in local chat DB
                     val transferEntity = MessageEntity(
-                        id = "msg_${System.currentTimeMillis()}",
+                        id = "transfer_${body.resolvedReference}",
                         conversationId = conversationId,
                         senderId = session.userId.toString(),
                         senderWalletId = session.walletId,
@@ -1697,13 +1709,14 @@ class OnChatRepository(private val context: Context) {
                         content = "💸 Transfert de $amount $currency",
                         timestamp = now,
                         isMine = true,
-                        status = "delivered",
+                        status = "receipt_pending",
                         type = "in_chat_transfer",
                         transferAmount = amount,
                         transferCurrency = currency,
                         transferReference = txRef
                     )
                     messageDao.insertMessage(transferEntity)
+                    syncTransferReceipt(conversationId, txRef, transferEntity.id)
 
                     if (conv != null) {
                         conversationDao.insertConversation(
@@ -1728,6 +1741,9 @@ class OnChatRepository(private val context: Context) {
                 val errMsg = parsed?.error ?: parsed?.message ?: if (response.code() == 401 || response.code() == 400) "Code PIN incorrect." else if (errBody.isNotBlank()) errBody else "Échec du transfert"
                 Result.failure(Exception(errMsg))
             }
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (e: java.io.IOException) {
+            Result.failure(Exception("Réponse réseau indisponible. Vérifiez l’historique du portefeuille avant de renvoyer ce paiement.", e))
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -2040,6 +2056,41 @@ class OnChatRepository(private val context: Context) {
         }
     }
 
+    suspend fun publishVideoFile(file: java.io.File, durationSeconds: Int, allowReuse: Boolean, rightsConfirmed: Boolean, soundSourceId: Long?, soundTitle: String, progress: (Long, Long) -> Unit): VideoItem = withContext(Dispatchers.IO) {
+        require(file.length() in 1..(200L * 1024 * 1024)) { "La vidéo dépasse 200 Mo" }
+        require(durationSeconds in 1..600) { "La vidéo doit durer au maximum 10 minutes" }
+        val publisher = sessionDao.getSession()?.userId ?: error("Non connecté")
+        fun text(value: String) = value.toRequestBody("text/plain".toMediaTypeOrNull())
+        val fields = mutableMapOf("allowSoundReuse" to text(allowReuse.toString()), "soundRightsConfirmed" to text(rightsConfirmed.toString()), "soundTitle" to text(soundTitle))
+        soundSourceId?.let { fields["soundSourceId"] = text(it.toString()) }
+        val body = com.example.data.api.UploadProgressBody(file, "video/mp4".toMediaTypeOrNull(), progress)
+        val response = ApiClient.apiService.uploadVideo(MultipartBody.Part.createFormData("video", file.name, body), text("user"), text(publisher.toString()), text(durationSeconds.toString()), extraFields = fields)
+        val data = response.body()
+        if (!response.isSuccessful || data?.success != true || data.video?.resolvedUrl.isNullOrBlank()) {
+            val failure = response.errorBody()?.string()?.let { runCatching { org.json.JSONObject(it).optString("error") }.getOrNull() }
+            error(failure?.takeIf { it.isNotBlank() } ?: data?.error ?: "Échec de publication (HTTP ${response.code()})")
+        }
+        data!!.video!!
+    }
+
+    suspend fun requestEditorPlan(request: EditorRequest): EditorPlan = withContext(Dispatchers.IO) {
+        val response = ApiClient.apiService.requestEditorPlan(request)
+        val data = response.body()
+        if (!response.isSuccessful || data?.success != true || data.plan == null) {
+            val details = response.errorBody()?.string()?.let { runCatching { org.json.JSONObject(it).optString("error") }.getOrNull() }
+            error(details?.takeIf { it.isNotBlank() } ?: data?.error ?: "Jimmy indisponible (HTTP ${response.code()})")
+        }
+        data.plan
+    }
+    suspend fun reusableSound(id: Long): ReusableSound = withContext(Dispatchers.IO) {
+        val response = ApiClient.apiService.getReusableSound(id)
+        val data = response.body()
+        val sound = data?.sound
+        check(response.isSuccessful && data?.success == true) { data?.error ?: "Catalogue audio indisponible (HTTP ${response.code()})." }
+        check(sound != null) { "L’auteur n’a pas proposé ce son à la réutilisation." }
+        sound!!
+    }
+
     suspend fun uploadVideoGeneral(
         fileBytes: ByteArray,
         fileName: String,
@@ -2062,7 +2113,7 @@ class OnChatRepository(private val context: Context) {
         Log.d("VideoAPI", "POST $url")
         try {
             val response = ApiClient.apiService.likeVideo(videoId)
-            if (response.isSuccessful && response.body() != null) {
+            if (response.isSuccessful && response.body()?.success == true) {
                 val body = response.body()!!
                 Log.d("VideoAPI", "Like SUCCESS | Liked: ${body.liked} | Total Likes: ${body.likes}")
                 Result.success(body)
@@ -2079,7 +2130,7 @@ class OnChatRepository(private val context: Context) {
         Log.d("VideoAPI", "DELETE $url")
         try {
             val response = ApiClient.apiService.unlikeVideo(videoId)
-            if (response.isSuccessful && response.body() != null) {
+            if (response.isSuccessful && response.body()?.success == true) {
                 val body = response.body()!!
                 Log.d("VideoAPI", "Unlike SUCCESS | Liked: ${body.liked} | Total Likes: ${body.likes}")
                 Result.success(body)
@@ -2096,7 +2147,7 @@ class OnChatRepository(private val context: Context) {
         Log.d("VideoAPI", "GET $url")
         try {
             val response = ApiClient.apiService.getVideoComments(videoId, limit, offset)
-            if (response.isSuccessful && response.body() != null) {
+            if (response.isSuccessful && response.body()?.success == true) {
                 val comments = response.body()!!.comments
                 Log.d("VideoAPI", "Fetched ${comments.size} comments for video $videoId")
                 Result.success(comments)
@@ -2113,7 +2164,7 @@ class OnChatRepository(private val context: Context) {
         Log.d("VideoAPI", "POST $url | Content: $content")
         try {
             val response = ApiClient.apiService.postVideoComment(videoId, PostVideoCommentRequest(content))
-            if (response.isSuccessful && response.body() != null) {
+            if (response.isSuccessful && response.body()?.success == true) {
                 val body = response.body()!!
                 if (body.comment != null) {
                     Result.success(body.comment)
@@ -2303,6 +2354,14 @@ class OnChatRepository(private val context: Context) {
         return phones.distinct()
     }
 
+    private fun statusTimestamp(value: String): Long {
+        value.toLongOrNull()?.let { return it }
+        for (pattern in listOf("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", "yyyy-MM-dd'T'HH:mm:ssXXX")) {
+            try { java.text.SimpleDateFormat(pattern, java.util.Locale.US).parse(value)?.let { return it.time } } catch (_: Exception) { }
+        }
+        return 0L
+    }
+
     suspend fun fetchStatusesFromServer(): Result<Boolean> = withContext(Dispatchers.IO) {
         try {
             // 1. Fetch our own statuses and/or legacy global statuses
@@ -2317,14 +2376,14 @@ class OnChatRepository(private val context: Context) {
             if (response.isSuccessful && response.body() != null) {
                 val body = response.body()!!
                 val groups = body.statusGroups
-                groups.forEach { group ->
+                groups.filter { it.resolvedUserId == sessionDao.getSession()?.userId }.forEach { group ->
                     group.statuses.forEach { item ->
                         fetchedEntities.add(
                             StatusEntity(
                                 id = item.id,
-                                userId = group.userId,
-                                userName = group.userName,
-                                userAvatar = group.userAvatar,
+                                userId = group.resolvedUserId,
+                                userName = group.resolvedName,
+                                userAvatar = group.resolvedAvatar,
                                 type = item.type,
                                 content = item.content,
                                 backgroundColor = item.backgroundColor,
@@ -2332,8 +2391,8 @@ class OnChatRepository(private val context: Context) {
                                 thumbnailUrl = item.thumbnailUrl,
                                 duration = item.duration,
                                 visibility = item.visibility,
-                                timestamp = item.createdAt.toLongOrNull() ?: System.currentTimeMillis(),
-                                expiresAt = item.expiresAt.toLongOrNull() ?: (System.currentTimeMillis() + 86400000L),
+                                timestamp = statusTimestamp(item.createdAt),
+                                expiresAt = statusTimestamp(item.expiresAt),
                                 viewsCount = item.viewsCount,
                                 likesCount = item.likesCount,
                                 isLiked = item.isLiked
@@ -2347,6 +2406,7 @@ class OnChatRepository(private val context: Context) {
             val contactPhones = getLocalContactPhones()
             if (contactPhones.isNotEmpty()) {
                 val contactsResult = checkStatuses(contactPhones)
+                contactsResult.getOrThrow()
                 contactsResult.onSuccess { contacts ->
                     contacts.forEach { contact ->
                         if (contact.user != null) {
@@ -2364,8 +2424,8 @@ class OnChatRepository(private val context: Context) {
                                         thumbnailUrl = item.thumbnailUrl,
                                         duration = item.duration,
                                         visibility = item.visibility,
-                                        timestamp = item.createdAt.toLongOrNull() ?: System.currentTimeMillis(),
-                                        expiresAt = item.expiresAt.toLongOrNull() ?: (System.currentTimeMillis() + 86400000L),
+                                        timestamp = statusTimestamp(item.createdAt),
+                                        expiresAt = statusTimestamp(item.expiresAt),
                                         viewsCount = item.viewsCount,
                                         likesCount = item.likesCount,
                                         isLiked = item.isLiked
@@ -2378,9 +2438,8 @@ class OnChatRepository(private val context: Context) {
             }
 
             // 3. Insert all synchronized statuses into the DB
-            if (fetchedEntities.isNotEmpty()) {
-                statusDao.insertStatuses(fetchedEntities)
-            }
+            if (!response.isSuccessful || response.body()?.success != true) error("Synchronisation des statuts indisponible")
+            statusDao.replaceSyncedStatuses(fetchedEntities.filter { it.expiresAt > System.currentTimeMillis() }.distinctBy { it.id })
             Result.success(true)
         } catch (e: Exception) {
             Log.w("OnChatRepository", "fetchStatusesFromServer error: ${e.message}")
@@ -2673,15 +2732,15 @@ class OnChatRepository(private val context: Context) {
 
     suspend fun checkStatuses(phoneNumbers: List<String>): Result<List<OnChatStatusContact>> = withContext(Dispatchers.IO) {
         try {
-            val response = ApiClient.apiService.checkStatuses(CheckStatusesRequest(phoneNumbers))
-            if (response.isSuccessful && response.body()?.success == true) {
-                Result.success(response.body()?.contacts ?: emptyList())
-            } else {
-                Result.failure(Exception("Échec de la récupération des statuts"))
+            val contacts = mutableListOf<OnChatStatusContact>()
+            for (batch in phoneNumbers.filter { it.filter(Char::isDigit).length >= 9 }.distinctBy { cleanPhoneNumber9Digits(it) }.chunked(500)) {
+                val response = ApiClient.apiService.checkStatuses(CheckStatusesRequest(batch))
+                check(response.isSuccessful && response.body()?.success == true) { "Échec de la récupération des statuts" }
+                contacts.addAll(response.body()?.contacts.orEmpty())
             }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+            Result.success(contacts)
+        } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+        catch (error: Exception) { Result.failure(error) }
     }
 
     suspend fun viewStatus(statusId: Long): Result<Boolean> = withContext(Dispatchers.IO) {

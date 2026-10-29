@@ -34,12 +34,20 @@ data class StatusesResponse(
 
 @JsonClass(generateAdapter = true)
 data class StatusGroup(
-    @Json(name = "userId") val userId: Long,
-    @Json(name = "userName") val userName: String,
+    @Json(name = "userId") val userId: Long = 0,
+    @Json(name = "userName") val userName: String = "",
+    @Json(name = "contact") val contact: StatusOwner? = null,
     @Json(name = "userAvatar") val userAvatar: String? = null,
     @Json(name = "statuses") val statuses: List<OnChatStatusItem> = emptyList(),
-    @Json(name = "lastUpdated") val lastUpdated: Long = System.currentTimeMillis()
-)
+    @Json(name = "lastUpdated") val lastUpdated: Long = 0
+) {
+    val resolvedUserId: Long get() = contact?.id ?: userId
+    val resolvedName: String get() = contact?.fullName ?: userName
+    val resolvedAvatar: String? get() = contact?.photo ?: userAvatar
+}
+@JsonClass(generateAdapter = true)
+data class StatusOwner(@Json(name = "id") val id: Long, @Json(name = "full_name") val fullName: String, @Json(name = "profile_photo") val photo: String? = null)
+
 
 @JsonClass(generateAdapter = true)
 data class OnChatStatusItem(

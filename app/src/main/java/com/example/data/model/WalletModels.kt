@@ -15,11 +15,21 @@ data class WalletApiResponse(
     @Json(name = "nationalCurrency") val nationalCurrency: NationalCurrencyDto? = null,
     @Json(name = "balances") val balances: BalancesDto? = null,
     @Json(name = "bitcoin") val bitcoin: BitcoinDto? = null,
+    @Json(name = "usdt") val usdt: BitcoinDto? = null,
     @Json(name = "crypto") val crypto: List<CryptoBalanceDto>? = null,
     @Json(name = "cards") val cards: List<CardDto>? = null,
     @Json(name = "transactions") val transactions: List<TransactionDto>? = null,
     @Json(name = "sync") val sync: SyncDto? = null
 )
+
+fun WalletApiResponse.assetBalance(code: String): Double {
+    val currency = code.uppercase()
+    if (currency == "BTC") bitcoin?.balance?.let { return it }
+    if (currency == "USDT" || currency == "USDT_TRC20") usdt?.balance?.let { return it }
+    val aliases = if (currency == "USDT") setOf("USDT", "USDT_TRC20") else setOf(currency)
+    return (crypto.orEmpty() + balances?.crypto.orEmpty()).firstOrNull { it.currency?.uppercase() in aliases }?.balance
+        ?: balances?.fiat?.get(currency) ?: 0.0
+}
 
 @JsonClass(generateAdapter = true)
 data class WalletObject(

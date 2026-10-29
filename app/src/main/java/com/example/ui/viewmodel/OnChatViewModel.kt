@@ -476,10 +476,13 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun performSocialAction(userId: Long, action: String, relationType: String? = null) {
+    fun performSocialAction(userId: Long, action: String, relationType: String? = null, onComplete: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val result = repository.performSocialAction(userId, action, relationType)
             result.onSuccess { res ->
+                if (!res.success) { _errorMessage.value = res.error ?: "Abonnement refusé"; onComplete(false); return@onSuccess }
+                if (action == "follow" || action == "unfollow") _realVideosFeed.value = _realVideosFeed.value.map { item -> if (item.publisher?.type == "user" && item.publisher.id == userId) item.copy(follow = VideoFollowInfo(action == "follow")) else item }
+                onComplete(true)
                 // Update local public profile state with new relation/stats in nested object
                 val current = _publicProfile.value
                 val p = current?.profile
@@ -512,6 +515,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     _successMessage.value = res.message
                 }
             }.onFailure {
+                onComplete(false)
                 _errorMessage.value = it.message ?: "Action échouée"
             }
         }
@@ -974,42 +978,20 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun uploadVideo(uri: Uri, caption: String = "", onComplete: (Boolean, String?) -> Unit) {
         viewModelScope.launch {
             _isUploading.value = true
-            _uploadProgress.value = 0.05f
+            _uploadProgress.value = 0f
             var exported: java.io.File? = null
             try {
                 val context = getApplication<Application>()
-                val uploadUri = if (caption.isBlank()) uri else {
-                    val duration = com.example.media.VideoExporter.durationMs(context, uri)
-                    val output = com.example.media.VideoExporter.export(context, uri, duration,
-                        com.example.media.VideoExporter.Edits(0f, 1f, 1f, 1f, false, "Normal",
-                            listOf(com.example.media.VideoExporter.Label(caption, android.graphics.Color.WHITE, 0x99000000.toInt(), 0f, -0.8f))))
-                    exported = output
-                    Uri.fromFile(output)
-                }
-                val bytes = withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uploadUri)?.use { it.readBytes() } }
-                if (bytes == null) {
-                    onComplete(false, "Impossible de lire le fichier")
-                    return@launch
-                }
-                
-                val mimeType = context.contentResolver.getType(uploadUri) ?: "video/mp4"
-                val extension = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "mp4"
-                val fileName = "video_${System.currentTimeMillis()}.$extension"
-                val currentUserId = currentSession.value?.userId
-                val result = repository.uploadVideoGeneral(bytes, fileName, mimeType, publisherId = currentUserId)
-                
-                if (!result.isNullOrBlank()) {
-                    _uploadProgress.value = 1.0f
-                    onComplete(true, null)
-                } else {
-                    onComplete(false, "Échec de l'envoi au serveur")
-                }
-            } catch (e: Exception) {
-                onComplete(false, e.message)
-            } finally {
-                exported?.delete()
-                _isUploading.value = false
-            }
+                val duration = com.example.media.VideoExporter.durationMs(context, uri)
+                check(duration <= 600_000) { "La vidéo dépasse 10 minutes. Réduisez-la dans l’éditeur." }
+                val labels = if (caption.isBlank()) emptyList() else listOf(com.example.media.VideoExporter.Label(caption, android.graphics.Color.WHITE, 0x99000000.toInt(), 0f, -0.8f))
+                val output = com.example.media.VideoExporter.export(context, uri, duration, com.example.media.VideoExporter.Edits(0f, 1f, 1f, 1f, false, "Normal", labels))
+                exported = output
+                publishEditedVideo(output)
+                onComplete(true, null)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { onComplete(false, e.message) }
+            finally { exported?.delete(); _isUploading.value = false }
         }
     }
 
@@ -1144,6 +1126,18 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         return null
     }
 
+    suspend fun publishEditedVideo(file: java.io.File, allowReuse: Boolean = false, rightsConfirmed: Boolean = false, sourceId: Long? = null, soundTitle: String = "Son original"): String {
+        val duration = com.example.media.VideoExporter.durationMs(getApplication(), android.net.Uri.fromFile(file))
+        check(duration in 1..600_000) { "La vidéo doit durer au maximum 10 minutes." }
+        _uploadProgress.value = 0f
+        val video = repository.publishVideoFile(file, kotlin.math.ceil(duration / 1000.0).toInt(), allowReuse, rightsConfirmed, sourceId, soundTitle) { sent, total ->
+            _uploadProgress.value = if (total > 0) sent.toFloat() / total else 0f
+        }
+        return video.resolvedUrl
+    }
+    suspend fun editorPlan(prompt: String, durationSeconds: Double, audio: String?): com.example.data.model.EditorPlan = repository.requestEditorPlan(com.example.data.model.EditorRequest(prompt, durationSeconds, audio))
+    suspend fun reusableSound(id: Long) = repository.reusableSound(id)
+
     suspend fun uploadVideoGeneral(bytes: ByteArray, fileName: String, mimeType: String): String? {
         val result = repository.uploadVideoGeneral(bytes, fileName, mimeType)
         if (!result.isNullOrBlank()) {
@@ -1154,6 +1148,20 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- CashPay Real Videos Feed Actions ---
 
+    private var hasMoreVideos = true
+    fun loadMoreVideos() {
+        if (_isVideosLoading.value || !hasMoreVideos) return
+        viewModelScope.launch {
+            _isVideosLoading.value = true
+            try {
+                repository.fetchVideos(limit = 50, offset = _realVideosFeed.value.size).onSuccess { next ->
+                    hasMoreVideos = next.size == 50
+                    _realVideosFeed.value = (_realVideosFeed.value + next).distinctBy { it.id }
+                }.onFailure { _errorMessage.value = "Chargement des vidéos impossible." }
+            } finally { _isVideosLoading.value = false }
+        }
+    }
+
     fun fetchVideosFeed() {
         viewModelScope.launch {
             _isVideosLoading.value = true
@@ -1161,6 +1169,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             _isVideosLoading.value = false
             result.onSuccess { list ->
                 _realVideosFeed.value = list
+                hasMoreVideos = list.size == 50
             }.onFailure { err ->
                 Log.w("OnChatViewModel", "fetchVideosFeed error: ${err.message}")
             }
@@ -1343,7 +1352,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         amount: Double,
         currency: String
     ): Result<TransferResponse> {
-        return repository.previewTransfer(receiverWalletId, recipientAddress, amount, currency)
+        return repository.previewTransfer(receiverWalletId, recipientAddress, amount, currency, _activeConversationId.value)
     }
 
     suspend fun executeInChatTransfer(

@@ -178,6 +178,7 @@ data class TransferExecuteRequest(
 @JsonClass(generateAdapter = true)
 data class TransferExecuteResponse(
     @Json(name = "success") val success: Boolean = false,
+    @Json(name = "transaction") val transaction: TransactionDto? = null,
     @Json(name = "transactionId") val transactionId: String? = null,
     @Json(name = "reference") val reference: String? = null,
     @Json(name = "amount") val amount: Double? = null,
@@ -274,7 +275,7 @@ data class TransferResponse(
     @Json(name = "success") val success: Boolean = false,
     @Json(name = "error") val error: String? = null,
     @Json(name = "message") val message: String? = null,
-    @Json(name = "status") val status: Int? = null,
+    @Json(name = "status") val status: Any? = null,
     @Json(name = "transaction") val transaction: TransactionDto? = null,
     @Json(name = "userId") val userId: Long? = null,
     @Json(name = "walletId") val walletId: String? = null,
@@ -286,7 +287,9 @@ data class TransferResponse(
     @Json(name = "fee") val fee: Any? = null,
     @Json(name = "totalDebit") val totalDebit: Any? = null,
     @Json(name = "txHash") val txHash: String? = null,
-    @Json(name = "reference") val reference: String? = null
+    @Json(name = "reference") val reference: String? = null,
+    @Json(name = "referenceCode") val referenceCode: String? = null,
+    @Json(name = "totalDebited") val totalDebited: Any? = null
 ) {
     val isInsufficientBalance: Boolean
         get() = error?.contains("Solde insuffisant", ignoreCase = true) == true ||
@@ -308,7 +311,7 @@ data class TransferResponse(
         }
 
     val resolvedTotalDebit: Double
-        get() = when (val t = totalDebit) {
+        get() = when (val t = totalDebited ?: totalDebit) {
             is Number -> t.toDouble()
             is String -> t.toDoubleOrNull() ?: (resolvedAmount + resolvedFee)
             else -> (resolvedAmount + resolvedFee)
@@ -322,10 +325,10 @@ data class TransferResponse(
         }
 
     val resolvedReference: String
-        get() = reference ?: transaction?.reference ?: "TR-${System.currentTimeMillis()}"
+        get() = referenceCode ?: reference ?: transaction?.reference ?: txHash ?: ""
 
     val isTransferSuccess: Boolean
-        get() = success && transaction != null
+        get() = success && (transaction != null || resolvedReference.isNotBlank()) && !status.toString().equals("Failed", true)
 }
 
 // --- OnChat Official Reference API DTOs (https://app.cashpay-all.com) ---

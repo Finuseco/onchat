@@ -406,8 +406,14 @@ interface OnChatApiService {
         @Part("publisherType") publisherType: RequestBody? = null,
         @Part("publisherId") publisherId: RequestBody? = null,
         @Part("durationSeconds") durationSeconds: RequestBody? = null,
-        @Part("thumbnailUrl") thumbnailUrl: RequestBody? = null
+        @Part("thumbnailUrl") thumbnailUrl: RequestBody? = null,
+        @PartMap extraFields: Map<String, @JvmSuppressWildcards RequestBody> = emptyMap()
     ): Response<VideoUploadResponse>
+
+    @POST("api/onchat/media/editor")
+    suspend fun requestEditorPlan(@Body request: EditorRequest): Response<EditorResponse>
+    @GET("api/v1/media/videos/{id}/sound")
+    suspend fun getReusableSound(@Path("id") id: Long): Response<SoundResponse>
 
     @GET("api/v1/media/videos")
     suspend fun getVideos(
@@ -476,6 +482,12 @@ interface OnChatApiService {
     ): Response<WalletApiResponse>
 
     // 17. Execute Transfer (CashPay & Bitcoin)
+    @POST("api/onchat/conversations/{conversationId}/transfer-receipt")
+    suspend fun publishTransferReceipt(@Path("conversationId") conversationId: String, @Body request: Map<String, String>): Response<SendMessageResponse>
+
+    @POST("api/onchat/conversations/{conversationId}/crypto-quote")
+    suspend fun quoteCryptoTransfer(@Path("conversationId") conversationId: String, @Body request: TransferQuoteRequest): Response<TransferResponse>
+
     @POST("api/v1/transfers")
     suspend fun executeGlobalTransfer(
         @Body request: TransferRequest

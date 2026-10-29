@@ -7,6 +7,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
 import com.example.media.VideoExporter
+import com.example.data.model.SubtitleCue
+import com.example.data.model.ReusableSound
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CancellationException
@@ -61,6 +64,7 @@ fun VideoEditorScreen(
     mediaUri: String,
     mediaType: String,
     viewModel: OnChatViewModel? = null,
+    reusedSound: ReusableSound? = null,
     onBack: () -> Unit,
     onPublish: (String, String) -> Unit // (uploadedUrl, caption)
 ) {
@@ -68,7 +72,21 @@ fun VideoEditorScreen(
     var caption by remember { mutableStateOf("") }
     var selectedTool by remember { mutableStateOf<String?>("Modifier") }
     var isPublishing by remember { mutableStateOf(false) }
-    var uploadProgress by remember { mutableFloatStateOf(0f) }
+    val transferProgress = viewModel?.uploadProgress?.collectAsState()?.value ?: 0f
+    var exportPhase by remember { mutableStateOf("Préparation du montage") }
+    val editorScope = rememberCoroutineScope()
+    val sourceIsPhoto = mediaType.contains("photo", true) || mediaType.contains("image", true)
+    var photos by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var secondsPerPhoto by remember { mutableFloatStateOf(3f) }
+    var outputHeight by remember { mutableIntStateOf(720) }
+    var allowReuse by remember { mutableStateOf(false) }
+    var rightsConfirmed by remember { mutableStateOf(false) }
+    var selectedSound by remember { mutableStateOf(reusedSound) }
+    var previewPosition by remember { mutableLongStateOf(0L) }
+    var renderedPreview by remember { mutableStateOf<java.io.File?>(null) }
+    var renderingPreview by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) { onDispose { renderedPreview?.delete() } }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { photos = it.take(100) }
 
     // --- Editing State Variables ---
     // 1. Trim & Speed
@@ -78,19 +96,21 @@ fun VideoEditorScreen(
     var totalDurationSeconds by remember { mutableFloatStateOf(0f) }
     var previewSize by remember { mutableStateOf(IntSize(1, 1)) }
     LaunchedEffect(mediaUri) {
-        try { totalDurationSeconds = VideoExporter.durationMs(context, Uri.parse(mediaUri)) / 1000f }
+        try { totalDurationSeconds = if (sourceIsPhoto) secondsPerPhoto else VideoExporter.durationMs(context, Uri.parse(mediaUri)) / 1000f }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { Toast.makeText(context, "Impossible de lire la durée de la vidéo", Toast.LENGTH_LONG).show() }
     }
-    val currentDuration = (totalDurationSeconds * (trimEndRatio - trimStartRatio) / playbackSpeed)
+    val currentDuration = (if (sourceIsPhoto) secondsPerPhoto else totalDurationSeconds * (trimEndRatio - trimStartRatio) / playbackSpeed) + photos.size * secondsPerPhoto
 
     // 2. Audio & Sound
     var isAudioMuted by remember { mutableStateOf(false) }
     var audioVolume by remember { mutableFloatStateOf(1.0f) }
     var musicVolume by remember { mutableFloatStateOf(0.7f) }
-    var selectedMusicTitle by remember { mutableStateOf("Son original") }
-    var selectedMusicUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedMusicTitle by remember { mutableStateOf(reusedSound?.let { "${it.title} • ${it.authorName}" } ?: "Son original") }
+    var selectedMusicUri by remember { mutableStateOf<Uri?>(reusedSound?.let { Uri.parse(it.url) }) }
     val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        selectedSound = null
+        rightsConfirmed = false
         selectedMusicUri = uri
         selectedMusicTitle = if (uri == null) "Son original" else "Fichier audio sélectionné"
     }
@@ -129,18 +149,40 @@ fun VideoEditorScreen(
 
     // 5. Captions
     var subtitleText by remember { mutableStateOf("") }
+    var subtitleCues by remember { mutableStateOf<List<SubtitleCue>>(emptyList()) }
     var showSubtitles by remember { mutableStateOf(false) }
 
     // 6. AI Magic Prompt State
     var aiPrompt by remember { mutableStateOf("") }
     var isAiGenerating by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isPublishing) {
-        if (isPublishing) {
-            var exported: java.io.File? = null
+    fun askJimmy(transcribe: Boolean) {
+        if (isAiGenerating || viewModel == null) return
+        editorScope.launch {
+            isAiGenerating = true
             try {
-                check(viewModel != null) { "Publication indisponible" }
-                check(totalDurationSeconds > 0) { "Durée de vidéo indisponible" }
+                val clipSeconds = if (sourceIsPhoto) currentDuration else totalDurationSeconds * (trimEndRatio - trimStartRatio)
+                check(clipSeconds in 0.001f..600f) { "Réduisez la sélection à 10 minutes maximum." }
+                val audio = if (transcribe && !sourceIsPhoto) VideoExporter.audioForJimmy(context, Uri.parse(mediaUri), (totalDurationSeconds * trimStartRatio * 1000).toLong(), (totalDurationSeconds * trimEndRatio * 1000).toLong()) else null
+                check(!transcribe || audio != null) { "Choisissez une vidéo avec une piste parlée." }
+                val plan = viewModel.editorPlan(if (transcribe) "Transcris toutes les paroles en sous-titres synchronisés. Conserve le style naturel." else aiPrompt, clipSeconds.toDouble(), audio)
+                selectedFilterName = plan.filter
+                playbackSpeed = if (transcribe) 1f else plan.speed
+                audioVolume = plan.voiceVolume
+                if (plan.caption.isNotBlank()) caption = plan.caption
+                if (audio != null) {
+                    val offset = totalDurationSeconds * trimStartRatio
+                    subtitleCues = plan.subtitles.map { it.copy(start = it.start + offset, end = it.end + offset) }
+                    showSubtitles = true
+                    subtitleText = ""
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { Toast.makeText(context, e.message ?: "Jimmy indisponible", Toast.LENGTH_LONG).show() }
+            finally { isAiGenerating = false }
+        }
+    }
+
+    fun currentEdits(): VideoExporter.Edits {
                 val labels = textOverlays.map { label ->
                     VideoExporter.Label(label.text, label.color.toArgb(), label.backgroundColor.toArgb(),
                         2f * label.offsetX / previewSize.width, -2f * label.offsetY / previewSize.height)
@@ -149,14 +191,25 @@ fun VideoEditorScreen(
                 if (showSubtitles && subtitleText.isNotBlank()) {
                     labels.add(VideoExporter.Label(subtitleText, android.graphics.Color.WHITE, 0x99000000.toInt(), 0f, -0.65f))
                 }
-                val output = VideoExporter.export(context, Uri.parse(mediaUri), (totalDurationSeconds * 1000).toLong(),
-                    VideoExporter.Edits(trimStartRatio, trimEndRatio, playbackSpeed, audioVolume, isAudioMuted,
-                        selectedFilterName, labels, selectedMusicUri, musicVolume))
+        return VideoExporter.Edits(trimStartRatio, trimEndRatio, playbackSpeed, audioVolume, isAudioMuted,
+                        selectedFilterName, labels, selectedMusicUri, musicVolume,
+                        photos = photos, sourceIsPhoto = sourceIsPhoto, photoDurationMs = (secondsPerPhoto * 1000).toLong(), outputHeight = outputHeight, subtitles = if (showSubtitles) subtitleCues else emptyList())
+    }
+
+    LaunchedEffect(isPublishing) {
+        if (isPublishing) {
+            var exported: java.io.File? = null
+            try {
+                check(viewModel != null) { "Publication indisponible" }
+                check(totalDurationSeconds > 0) { "Durée de vidéo indisponible" }
+                check(currentDuration <= 600) { "Le montage dépasse 10 minutes. Réduisez la sélection ou les photos." }
+                check(!allowReuse || rightsConfirmed) { "Confirmez les droits du son avant de proposer sa réutilisation." }
+                exportPhase = "Export du montage réel"
+                val output = VideoExporter.export(context, Uri.parse(mediaUri), (totalDurationSeconds * 1000).toLong(), currentEdits())
                 exported = output
                 check(output.length() in 1..(200L * 1024 * 1024)) { "La vidéo exportée dépasse 200 Mo" }
-                val bytes = withContext(Dispatchers.IO) { output.readBytes() }
-                val finalUrl = viewModel.uploadVideoGeneral(bytes, output.name, "video/mp4")
-                    ?: error("Échec de la publication au serveur")
+                exportPhase = "Envoi de la vidéo"
+                val finalUrl = viewModel.publishEditedVideo(output, allowReuse && selectedSound == null, rightsConfirmed, selectedSound?.sourceId, selectedMusicTitle)
                 onPublish(finalUrl, caption)
             } catch (e: CancellationException) {
                 throw e
@@ -198,7 +251,7 @@ fun VideoEditorScreen(
                 // Publish Next Button
                 IconButton(
                     onClick = { isPublishing = true },
-                    enabled = !isPublishing && totalDurationSeconds > 0,
+                    enabled = !isPublishing && !renderingPreview && totalDurationSeconds > 0 && currentDuration <= 600,
                     modifier = Modifier
                         .size(42.dp)
                         .clip(CircleShape)
@@ -227,6 +280,7 @@ fun VideoEditorScreen(
                 if (mediaType.contains("video", ignoreCase = true) || mediaUri.endsWith(".mp4", ignoreCase = true)) {
                     StatusVideoPlayer(
                         videoUrl = mediaUri,
+                        onPosition = { previewPosition = it },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -258,6 +312,11 @@ fun VideoEditorScreen(
                             textAlign = TextAlign.Center
                         )
                     }
+                }
+
+                if (showSubtitles && subtitleCues.isNotEmpty()) {
+                    val cue = subtitleCues.firstOrNull { previewPosition / 1000.0 >= it.start && previewPosition / 1000.0 < it.end }
+                    cue?.let { Text(it.text, color = Color.White, modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp).background(Color.Black.copy(alpha = 0.7f)), textAlign = TextAlign.Center) }
                 }
 
                 // Dynamic User Text Overlays (Draggable)
@@ -373,6 +432,39 @@ fun VideoEditorScreen(
                 }
             }
 
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(onClick = { photoPicker.launch("image/*") }, label = { Text("Photos (${photos.size})") })
+                AssistChip(enabled = !renderingPreview && !isPublishing && currentDuration <= 600, onClick = {
+                    editorScope.launch {
+                        renderingPreview = true
+                        try { renderedPreview?.delete(); renderedPreview = VideoExporter.export(context, Uri.parse(mediaUri), (totalDurationSeconds * 1000).toLong(), currentEdits()) }
+                        catch (error: CancellationException) { throw error }
+                        catch (error: Exception) { Toast.makeText(context, error.message ?: "Rendu impossible", Toast.LENGTH_LONG).show() }
+                        finally { renderingPreview = false }
+                    }
+                }, label = { Text(if (renderingPreview) "Rendu…" else "Aperçu rendu") })
+                FilterChip(selected = outputHeight == 720, onClick = { outputHeight = 720 }, label = { Text("720p • léger") })
+                FilterChip(selected = outputHeight == 1080, onClick = { outputHeight = 1080 }, label = { Text("1080p") })
+                Text("${currentDuration.toInt()} s / 600 s", color = if (currentDuration > 600) Color.Red else Color.White, modifier = Modifier.padding(12.dp))
+            }
+            if (sourceIsPhoto || photos.isNotEmpty()) Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("${secondsPerPhoto.toInt()} s/photo", color = Color.White, fontSize = 11.sp)
+                Slider(value = secondsPerPhoto, onValueChange = { secondsPerPhoto = it }, valueRange = 1f..10f, steps = 8, modifier = Modifier.weight(1f))
+            }
+            if (selectedSound != null) {
+                Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    coil.compose.AsyncImage(model = selectedSound?.authorAvatar, contentDescription = "Auteur du son", modifier = Modifier.size(28.dp).clip(CircleShape))
+                    Text("Son : ${selectedSound?.title} • ${selectedSound?.authorName}", color = OnChatCyan, fontSize = 11.sp)
+                }
+            } else Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = allowReuse, onCheckedChange = { allowReuse = it })
+                Text("Autoriser la réutilisation de mon son avec crédit", color = Color.White, fontSize = 11.sp)
+            }
+            if (allowReuse && selectedSound == null) Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = rightsConfirmed, onCheckedChange = { rightsConfirmed = it })
+                Text("Je détiens les droits et autorise cette utilisation sur OnChat", color = Color.White, fontSize = 10.sp)
+            }
+
             // Caption Text Input Box
             OutlinedTextField(
                 value = caption,
@@ -441,7 +533,7 @@ fun VideoEditorScreen(
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     FilterChip(selected = selectedMusicUri == null,
-                                        onClick = { selectedMusicUri = null; selectedMusicTitle = "Son original" },
+                                        onClick = { selectedMusicUri = null; selectedMusicTitle = "Son original"; selectedSound = null },
                                         label = { Text("Son original") })
                                     FilterChip(selected = selectedMusicUri != null,
                                         onClick = { musicPicker.launch("audio/*") },
@@ -462,6 +554,15 @@ fun VideoEditorScreen(
                                         colors = SliderDefaults.colors(thumbColor = OnChatCyan, activeTrackColor = OnChatCyan)
                                     )
                                     Text("${(audioVolume * 100).toInt()}%", color = Color.White, fontSize = 12.sp)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = isAudioMuted, onCheckedChange = { isAudioMuted = it })
+                                    Text("Couper le son original", color = Color.White, fontSize = 11.sp)
+                                }
+                                if (selectedMusicUri != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Musique", color = Color.White, fontSize = 11.sp)
+                                    Slider(value = musicVolume, onValueChange = { musicVolume = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
+                                    Text("${(musicVolume * 100).toInt()}%", color = Color.White, fontSize = 11.sp)
                                 }
                             }
                         }
@@ -554,19 +655,13 @@ fun VideoEditorScreen(
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Button(
                                         onClick = {
-                                            selectedFilterName = "Vibrant"
-                                            if (caption.isBlank()) {
-                                                caption = "Création exclusive sur OnChat Shorts ✨ #OnChat #CashPay #Viral"
-                                            }
-                                            if (subtitleText.isBlank()) {
-                                                subtitleText = "DÉCOUVREZ L'INNOVATION ONCHAT"
-                                                showSubtitles = true
-                                            }
+                                            askJimmy(false)
                                         },
+                                        enabled = !isAiGenerating && aiPrompt.isNotBlank(),
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD700)),
                                         shape = RoundedCornerShape(8.dp)
                                     ) {
-                                        Text("Appliquer IA", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Text(if (isAiGenerating) "Jimmy…" else "Appliquer Jimmy", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
@@ -589,10 +684,12 @@ fun VideoEditorScreen(
                                         colors = SwitchDefaults.colors(checkedThumbColor = OnChatCyan, checkedTrackColor = OnChatViolet)
                                     )
                                 }
+                                OutlinedButton(onClick = { askJimmy(true) }, enabled = !sourceIsPhoto && !isAiGenerating) { Text(if (isAiGenerating) "Analyse Jimmy…" else "Transcrire la parole avec Jimmy") }
+                                if (subtitleCues.isNotEmpty()) Text("${subtitleCues.size} sous-titres synchronisés • vérifiez le texte avant publication", color = OnChatCyan, fontSize = 11.sp)
                                 if (showSubtitles) {
                                     OutlinedTextField(
                                         value = subtitleText,
-                                        onValueChange = { subtitleText = it },
+                                        onValueChange = { subtitleText = it; subtitleCues = emptyList() },
                                         placeholder = { Text("Texte des sous-titres...") },
                                         modifier = Modifier.fillMaxWidth(),
                                         shape = RoundedCornerShape(8.dp),
@@ -639,6 +736,15 @@ fun VideoEditorScreen(
                             Text(title, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                         }
                     }
+                }
+            }
+        }
+
+        renderedPreview?.let { preview ->
+            androidx.compose.ui.window.Dialog(onDismissRequest = { renderedPreview = null; preview.delete() }) {
+                Column(Modifier.fillMaxWidth().background(Color.Black)) {
+                    StatusVideoPlayer(videoUrl = Uri.fromFile(preview).toString(), modifier = Modifier.fillMaxWidth().height(440.dp), showWatermark = false)
+                    TextButton(onClick = { renderedPreview = null; preview.delete() }) { Text("Revenir au montage") }
                 }
             }
         }
@@ -725,7 +831,7 @@ fun VideoEditorScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Export MP4 puis envoi au serveur",
+                        text = if (exportPhase == "Envoi de la vidéo") "${(transferProgress * 100).toInt()} % envoyés — confirmation serveur requise" else exportPhase,
                         color = OnChatCyan,
                         fontSize = 14.sp
                     )
