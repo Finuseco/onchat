@@ -314,7 +314,9 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             wsManager.incomingMessages.collect { pair ->
                 repository.insertWebSocketMessage(pair.first, pair.second)
+                OnChatNotificationHelper.signedInUserId = currentSession.value?.userId
                 if (pair.second.senderId == currentSession.value?.userId) return@collect
+                if (!OnChatNotificationHelper.appInForeground) return@collect
                 if (_activeConversationId.value == pair.first) wsManager.sendReadReceipt(pair.first)
                 
                 // Play immediate incoming notification sound
@@ -995,18 +997,53 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Conversation attachments never use the public reel publication endpoint. */
+    fun sendAttachment(uri: Uri, fileName: String, selectedType: String) {
+        val conversationId = _activeConversationId.value ?: return
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val fallback = when (selectedType) { "image" -> "image/jpeg"; "audio" -> "audio/mp4"; "video" -> "video/mp4"; else -> "application/octet-stream" }
+                val mime = context.contentResolver.getType(uri) ?: fallback
+                val type = when { mime.startsWith("image/") -> "image"; mime.startsWith("audio/") -> "audio"; mime.startsWith("video/") -> "video"; else -> "doc" }
+                val limit = (if (type == "video") 200 else 25) * 1024 * 1024
+                val bytes = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val block = ByteArray(8192)
+                        while (true) {
+                            val count = input.read(block)
+                            if (count < 0) break
+                            check(output.size().toLong() + count <= limit) { "Fichier trop volumineux." }
+                            output.write(block, 0, count)
+                        }
+                        output.toByteArray()
+                    } ?: error("Impossible de lire ce fichier.")
+                }
+                check(bytes.isNotEmpty()) { "Le fichier est vide." }
+                val path = repository.uploadMedia(bytes, fileName, mime) ?: error("Envoi du fichier refusé. Vérifiez le format et votre connexion.")
+                val url = if (path.startsWith("http")) path else "${ApiClient.BASE_URL.trimEnd('/')}$path"
+                val label = when (type) { "image" -> "Photo"; "audio" -> "Message vocal"; "video" -> "Vidéo"; else -> fileName }
+                repository.sendMessage(conversationId, label, type = type, fileUrl = url, fileName = fileName)
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { _errorMessage.value = error.message ?: "Échec de l’envoi du fichier." }
+        }
+    }
+
     fun sendAudioMessage(file: java.io.File) {
         val convId = _activeConversationId.value ?: return
         viewModelScope.launch {
             try {
-                val bytes = file.readBytes()
+                val bytes = withContext(Dispatchers.IO) { file.readBytes() }
                 val fileName = "voice_${System.currentTimeMillis()}.m4a"
-                val url = repository.uploadMedia(bytes, fileName, "audio/mp4")
+                val url = repository.uploadMedia(bytes, fileName, "audio/mp4") ?: error("Envoi du message vocal refusé. Vérifiez votre connexion.")
                 if (url != null) {
                     val finalUrl = if (url.startsWith("http")) url else "https://app.cashpay-all.com$url"
                     repository.sendMessage(convId, "🎤 Note vocale", type = "audio", fileUrl = finalUrl, fileName = fileName)
                 }
-            } catch (e: Exception) {
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                _errorMessage.value = e.message ?: "Échec de l’envoi du message vocal."
                 Log.e("OnChatViewModel", "sendAudioMessage error: ${e.message}")
             }
         }
@@ -1206,13 +1243,13 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun loadVideoComments(videoId: Long, onResult: (List<VideoCommentItem>) -> Unit) {
+    fun loadVideoComments(videoId: Long, onFailure: (String) -> Unit, onResult: (List<VideoCommentItem>) -> Unit) {
         viewModelScope.launch {
             val result = repository.getVideoComments(videoId)
             result.onSuccess { list ->
                 onResult(list)
             }.onFailure {
-                onResult(emptyList())
+                onFailure("Impossible de charger les commentaires. Vérifiez la connexion puis réessayez.")
             }
         }
     }
@@ -2392,7 +2429,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         val current = _activeMeeting.value ?: return
         viewModelScope.launch {
             meetingsRepository.getMeetingParticipants(current.meetCode).onSuccess { res ->
-                val myUserId = ApiClient.currentUserId ?: 101L
+                val myUserId = ApiClient.currentUserId ?: currentSession.value?.userId ?: return@onSuccess
                 val me = res.participants.firstOrNull { it.userId == myUserId }
                 _activeMeeting.value = current.copy(
                     participants = res.participants,
@@ -2424,7 +2461,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     priceAmount = res.priceAmount ?: priceAmount,
                     priceCurrency = res.priceCurrency ?: priceCurrency,
                     isPaid = priceAmount > 0,
-                    hostUserId = ApiClient.currentUserId ?: 101L
+                    hostUserId = ApiClient.currentUserId ?: currentSession.value?.userId ?: return@onSuccess
                 )
                 _activeMeetingBilling.value = updated
                 _activeMeeting.value = current.copy(billing = updated)

@@ -41,11 +41,23 @@ import com.example.ui.viewmodel.LoginStep
 
 class MainActivity : ComponentActivity() {
 
+    private var pendingNotificationConversation by mutableStateOf<String?>(null)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        pendingNotificationConversation = intent.getStringExtra(com.example.util.OnChatNotificationHelper.EXTRA_CONVERSATION_ID)
+    }
+
     private val viewModel: OnChatViewModel by viewModels()
+
+    override fun onStart() { super.onStart(); com.example.util.OnChatNotificationHelper.appInForeground = true }
+    override fun onStop() { com.example.util.OnChatNotificationHelper.appInForeground = false; super.onStop() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingNotificationConversation = intent.getStringExtra(com.example.util.OnChatNotificationHelper.EXTRA_CONVERSATION_ID)
 
         setContent {
             OnChatTheme {
@@ -69,6 +81,23 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(Unit) {
                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
                         notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+
+                LaunchedEffect(loginStep, isSessionChecking) {
+                    if (!isSessionChecking && loginStep == LoginStep.AUTHENTICATED) {
+                        try { com.example.service.OnChatBackgroundService.start(this@MainActivity) }
+                        catch (error: Exception) { android.util.Log.w("OnChat", "Service de notifications indisponible", error) }
+                    } else if (!isSessionChecking) {
+                        stopService(android.content.Intent(this@MainActivity, com.example.service.OnChatBackgroundService::class.java))
+                        com.example.util.OnChatNotificationHelper.signedInUserId = null
+                    }
+                }
+
+                LaunchedEffect(loginStep, pendingNotificationConversation) {
+                    if (loginStep == LoginStep.AUTHENTICATED) pendingNotificationConversation?.let {
+                        viewModel.openConversation(it)
+                        pendingNotificationConversation = null
                     }
                 }
 

@@ -179,7 +179,7 @@ fun LiveReelsScreen(
                         val video = validVideos[page]
                         ReelItemView(
                             video = video,
-                            active = page == pagerState.settledPage,
+                            active = page == pagerState.settledPage && activeCommentsVideo == null && activeSoundVideo == null && activeProfileVideo == null,
                             viewModel = viewModel,
                             session = session,
                             onOpenComments = { activeCommentsVideo = video },
@@ -349,6 +349,7 @@ fun ReelItemView(
         if (video.resolvedUrl.isNotBlank()) {
             StatusVideoPlayer(
                 videoUrl = video.resolvedUrl,
+                thumbnailUrl = video.thumbnailUrl,
                 isPaused = !active,
                 modifier = Modifier.fillMaxSize()
             )
@@ -630,12 +631,14 @@ fun ReelsCommentsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState()
     var newCommentText by remember { mutableStateOf("") }
+    var postingComment by remember { mutableStateOf(false) }
+    var commentError by remember { mutableStateOf<String?>(null) }
     val commentsList = remember { mutableStateListOf<VideoCommentItem>() }
     var isLoadingComments by remember { mutableStateOf(true) }
 
     LaunchedEffect(video.id) {
         isLoadingComments = true
-        viewModel.loadVideoComments(video.id) { fetched ->
+        viewModel.loadVideoComments(video.id, onFailure = { message -> commentError = message; isLoadingComments = false }) { fetched ->
             commentsList.clear()
             commentsList.addAll(fetched)
             isLoadingComments = false
@@ -747,6 +750,9 @@ fun ReelsCommentsSheet(
                 OutlinedTextField(
                     value = newCommentText,
                     onValueChange = { newCommentText = it },
+                    isError = commentError != null,
+                    supportingText = { commentError?.let { Text(it, color = Color.Red) } },
+                    enabled = !postingComment,
                     placeholder = { Text("Ajouter un commentaire...", color = Color.Gray, fontSize = 13.sp) },
                     modifier = Modifier.weight(1f),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -761,12 +767,15 @@ fun ReelsCommentsSheet(
                 IconButton(
                     onClick = {
                         val text = newCommentText.trim()
-                        if (text.isNotBlank()) {
-                            newCommentText = ""
+                        if (text.isNotBlank() && !postingComment) {
+                            postingComment = true
+                            commentError = null
                             viewModel.postVideoComment(video.id, text) { newComment ->
+                                postingComment = false
                                 if (newComment != null) {
                                     commentsList.add(0, newComment)
-                                }
+                                    newCommentText = ""
+                                } else { commentError = "Commentaire non envoyé. Réessayez." }
                             }
                         }
                     },

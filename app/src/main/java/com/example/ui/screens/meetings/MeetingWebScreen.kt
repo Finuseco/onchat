@@ -24,6 +24,7 @@ import java.net.URI
 @Composable
 fun MeetingWebScreen(url: String, onClose: () -> Unit) {
     val context = LocalContext.current
+    var loadProgress by remember { mutableIntStateOf(0) }
     var view by remember { mutableStateOf<WebView?>(null) }
     var pending by remember { mutableStateOf<PermissionRequest?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -41,6 +42,7 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
     }
     Column(Modifier.fillMaxSize()) {
         Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
+        if (loadProgress in 0..99 && error == null) LinearProgressIndicator(progress = { loadProgress / 100f }, modifier = Modifier.fillMaxWidth())
         if (error != null) { Text(error!!); Button(onClick = { view?.reload(); error = null }) { Text("Réessayer") } }
         AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = {
             WebView(context).apply {
@@ -62,6 +64,7 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
                     }
                 }
                 webChromeClient = object : WebChromeClient() {
+                    override fun onProgressChanged(webView: WebView, newProgress: Int) { loadProgress = newProgress }
                     override fun onPermissionRequest(request: PermissionRequest) {
                         post {
                             val supported = setOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE, PermissionRequest.RESOURCE_VIDEO_CAPTURE)
