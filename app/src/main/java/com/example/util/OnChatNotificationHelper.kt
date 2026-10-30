@@ -27,6 +27,8 @@ import com.example.R
  * - Custom RemoteViews styling with full backward compatibility
  */
 object OnChatNotificationHelper {
+    @Volatile var appInForeground: Boolean = false
+    @Volatile var signedInUserId: Long? = null
     private const val TAG = "OnChatNotifHelper"
 
     const val CHANNEL_CALLS_ID = "onchat_incoming_calls"

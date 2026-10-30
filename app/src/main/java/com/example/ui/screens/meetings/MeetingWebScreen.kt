@@ -22,11 +22,15 @@ import java.net.URI
 /** Shared authenticated meeting UI: one admission/PIN and organizer flow for web and Android. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun MeetingWebScreen(url: String, onClose: () -> Unit) {
+fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = false, onConnected: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
+    var loadProgress by remember { mutableIntStateOf(0) }
     var view by remember { mutableStateOf<WebView?>(null) }
     var pending by remember { mutableStateOf<PermissionRequest?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val connectedCallback by rememberUpdatedState(onConnected)
+    val closeCallback by rememberUpdatedState(onClose)
+    val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager }
     val origin = remember { URI(ApiClient.BASE_URL) }
     fun trusted(uri: Uri) = uri.scheme == "https" && uri.host == origin.host && uri.port in listOf(-1, 443)
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -37,14 +41,26 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
     }
     BackHandler { val current = view; if (current?.canGoBack() == true) current.goBack() else onClose() }
     DisposableEffect(Unit) {
-        onDispose { pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
+        onDispose { if (directCall) { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) }; audioManager.mode = android.media.AudioManager.MODE_NORMAL; audioManager.isSpeakerphoneOn = false }; pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
     }
     Column(Modifier.fillMaxSize()) {
-        Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
+        if (!directCall) Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
+        if (loadProgress in 0..99 && error == null) LinearProgressIndicator(progress = { loadProgress / 100f }, modifier = Modifier.fillMaxWidth())
         if (error != null) { Text(error!!); Button(onClick = { view?.reload(); error = null }) { Text("Réessayer") } }
         AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = {
             WebView(context).apply {
                 view = this
+                if (directCall) {
+                    audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                    audioManager.isSpeakerphoneOn = false
+                    addJavascriptInterface(object {
+                        @JavascriptInterface fun connectionUrl(): String = com.example.BuildConfig.ONCHAT_WS_URL
+                        @JavascriptInterface fun setSpeaker(enabled: Boolean) { post { audioManager.isSpeakerphoneOn = enabled } }
+                        @JavascriptInterface fun mediaState(video: Boolean) { post { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, true, video) } } }
+                        @JavascriptInterface fun connected(value: Boolean) { post { connectedCallback(value) } }
+                        @JavascriptInterface fun closeCall() { post { closeCallback() } }
+                    }, "OnChatAudio")
+                }
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = false
@@ -62,6 +78,7 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
                     }
                 }
                 webChromeClient = object : WebChromeClient() {
+                    override fun onProgressChanged(webView: WebView, newProgress: Int) { loadProgress = newProgress }
                     override fun onPermissionRequest(request: PermissionRequest) {
                         post {
                             val supported = setOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE, PermissionRequest.RESOURCE_VIDEO_CAPTURE)
@@ -75,6 +92,7 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
                     }
                     override fun onPermissionRequestCanceled(request: PermissionRequest) { if (pending === request) pending = null }
                 }
+                if (!trusted(Uri.parse(url))) { error = "Adresse OnChat non autorisée."; return@apply }
                 val token = ApiClient.authToken
                 if (token.isNullOrBlank()) error = "Votre session a expiré. Reconnectez-vous."
                 else CookieManager.getInstance().setCookie(ApiClient.BASE_URL, "cashpay-token=$token; Path=/; Secure; HttpOnly; SameSite=Lax") { accepted ->

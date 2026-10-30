@@ -677,58 +677,9 @@ fun ChatDetailScreen(
             onSendLocation = { title, subtitle, lat, lng ->
                 viewModel.sendMessage("$title • $subtitle", type = "location")
             },
-            onSendFile = { fileName, fileType, sizeStr, uri ->
-                if (uri != null) {
-                    when (fileType) {
-                        "video" -> {
-                            viewModel.uploadVideo(uri) { success, error ->
-                                if (success) {
-                                    Toast.makeText(context, "Vidéo envoyée !", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Erreur vidéo: $error", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                        "image" -> {
-                            coroutineScope.launch {
-                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                                if (bytes != null) {
-                                    val url = viewModel.uploadMediaBytes(bytes, fileName, "image/jpeg")
-                                    if (url != null) {
-                                        viewModel.sendMessage("🖼️ Photo", type = "image", fileUrl = url, fileName = fileName)
-                                    } else {
-                                        Toast.makeText(context, "Erreur upload image", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        }
-                        "audio" -> {
-                            coroutineScope.launch {
-                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                                if (bytes != null) {
-                                    val url = viewModel.uploadMediaBytes(bytes, fileName, "audio/mp4")
-                                    if (url != null) {
-                                        viewModel.sendMessage("🎤 Note vocale", type = "audio", fileUrl = url, fileName = fileName)
-                                    }
-                                }
-                            }
-                        }
-                        else -> {
-                            // Doc
-                            coroutineScope.launch {
-                                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                                if (bytes != null) {
-                                    val url = viewModel.uploadMediaBytes(bytes, fileName, "application/pdf")
-                                    if (url != null) {
-                                        viewModel.sendMessage("📄 $fileName ($sizeStr)", type = "doc", fileUrl = url, fileName = fileName)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    viewModel.sendMessage("📄 $fileName ($sizeStr)", type = if (fileType == "image") "image" else "doc")
-                }
+            onSendFile = { fileName, fileType, _, uri ->
+                if (uri != null) viewModel.sendAttachment(uri, fileName, fileType)
+                else Toast.makeText(context, "Fichier indisponible. Sélectionnez-le à nouveau.", Toast.LENGTH_LONG).show()
             },
             onSendContact = { name, phone, walletId, avatar ->
                 val avatarPart = if (!avatar.isNullOrBlank()) " • Avatar: $avatar" else ""
