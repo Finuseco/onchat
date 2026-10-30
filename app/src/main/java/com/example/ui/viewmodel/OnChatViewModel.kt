@@ -256,6 +256,9 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     // Active call session
     private val _activeCall = MutableStateFlow<CallSessionState?>(null)
     val activeCall: StateFlow<CallSessionState?> = _activeCall.asStateFlow()
+    private val _directCallUrl = MutableStateFlow<String?>(null)
+    val directCallUrl: StateFlow<String?> = _directCallUrl.asStateFlow()
+    fun reportDirectCallConnected(connected: Boolean) { _activeCall.value = _activeCall.value?.copy(isConnected = connected) }
 
     // Real active contacts stream
     val activeContacts: StateFlow<List<ContactCheckResult>> = repository.conversationsFlow
@@ -336,6 +339,12 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             wsManager.incomingCalls.collect { callState ->
+                if (_activeCall.value != null) {
+                    currentSession.value?.let { session ->
+                        try { ApiClient.apiService.respondCall(callState.callId, RespondCallRequest(session.walletId, "BUSY")) } catch (_: Exception) { }
+                    }
+                    return@collect
+                }
                 _incomingCall.value = callState
                 RingtoneHelper.playCallRingtone(getApplication())
                 OnChatNotificationHelper.showIncomingCallNotification(
@@ -352,6 +361,9 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     delay(25000)
                     if (_incomingCall.value?.callId == callState.callId) {
                         val missed = _incomingCall.value
+                        currentSession.value?.let { session ->
+                            try { ApiClient.apiService.respondCall(callState.callId, RespondCallRequest(session.walletId,"MISSED")) } catch (_: Exception) { }
+                        }
                         _incomingCall.value = null
                         RingtoneHelper.stopCallRingtone(getApplication())
                         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
@@ -386,13 +398,19 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                             repository.markOutgoingMessagesAsRead(conversationId)
                         }
                     }
-                    "call.accepted", "call.answer" -> {
-                        _activeCall.value?.let { current ->
-                            _activeCall.value = current.copy(isConnected = true)
-                        }
-                    }
+                    "call.accepted", "call.answer" -> { /* Media connectivity is reported by WebRTC, not by signalling. */ }
                     "call.rejected", "call.ended" -> {
-                        endCall()
+                        val id = envelope.resolvedCallId
+                        if (_activeCall.value?.roomId == id) {
+                            _activeCall.value = null
+                            _directCallUrl.value = null
+                            RingtoneHelper.stopCallRingtone(getApplication())
+                        }
+                        if (_incomingCall.value?.callId == id) {
+                            _incomingCall.value = null
+                            RingtoneHelper.stopCallRingtone(getApplication())
+                            OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
+                        }
                     }
                     "conference.invite" -> {
                         val title: String = envelope.data?.get("title")?.toString() ?: "Conférence OnChat"
@@ -948,6 +966,12 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun logout() {
         viewModelScope.launch {
+            val call = _activeCall.value
+            val session = currentSession.value
+            _directCallUrl.value = null
+            if (call != null && !call.roomId.startsWith("pending_") && session != null) {
+                try { ApiClient.apiService.endCall(call.roomId, EndCallRequest(session.walletId)) } catch (_: Exception) { }
+            }
             wsManager.disconnect()
             repository.logout()
             _activeConversationId.value = null
@@ -1648,84 +1672,23 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Audio & Video Calls ---
 
-    fun startCall(
-        peerName: String,
-        peerWalletId: String = "",
-        peerAvatar: String? = null,
-        isVideo: Boolean = false,
-        autoConnect: Boolean = false
-    ) {
-        val roomId = "call_${System.currentTimeMillis()}"
-        _activeCall.value = CallSessionState(
-            roomId = roomId,
-            peerName = peerName,
-            peerWalletId = peerWalletId,
-            peerAvatar = peerAvatar,
-            isVideo = isVideo,
-            isConnected = autoConnect,
-            isMuted = false,
-            isSpeakerOn = true,
-            isCameraFacingBack = false,
-            durationSeconds = 0
-        )
-
-        OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-
-        // Send real-time call signaling through WebSocket
-        if (!autoConnect) {
-            wsManager.sendCallSignaling(
-                event = "call.offer",
-                callId = roomId,
-                conversationId = null,
-                data = mapOf(
-                    "peerWalletId" to peerWalletId,
-                    "peerName" to peerName,
-                    "isVideo" to isVideo.toString()
-                )
-            )
-        }
-
+    fun startCall(peerName: String, peerWalletId: String = "", peerAvatar: String? = null, isVideo: Boolean = false, autoConnect: Boolean = false) {
+        if (_activeCall.value != null) return
+        val session = currentSession.value ?: return
+        if (peerWalletId.isBlank()) { _errorMessage.value = "Le portefeuille du correspondant est requis."; return }
+        val pendingId = "pending_${java.util.UUID.randomUUID()}"
+        _activeCall.value = CallSessionState(pendingId, peerName, peerWalletId, peerAvatar, isVideo)
         viewModelScope.launch {
-            // Forward recorded microphone audio chunks to remote peer via WebSocket
-            voiceCallManager.onLocalAudioChunk = { chunk ->
-                val current = _activeCall.value
-                if (current != null && current.isConnected) {
-                    val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
-                    wsManager.sendCallSignaling(
-                        event = "call.audio",
-                        callId = current.roomId,
-                        conversationId = null,
-                        data = mapOf(
-                            "audio" to base64,
-                            "peerWalletId" to current.peerWalletId
-                        )
-                    )
-                }
-            }
-
-            // Start real duplex microphone & audio playback
-            voiceCallManager.startVoiceSession()
-
-            // Record initial call entry
-            repository.recordCall(
-                peerName = peerName,
-                isVideo = isVideo,
-                isIncoming = autoConnect,
-                isMissed = false,
-                durationSeconds = 0,
-                peerWalletId = peerWalletId.ifBlank { null },
-                peerAvatar = peerAvatar
-            )
-
-            // Duration counter starts counting ONLY when connected (after remote peer answers)
-            while (_activeCall.value != null) {
-                delay(1000)
-                _activeCall.value?.let { current ->
-                    if (current.isConnected) {
-                        _activeCall.value = current.copy(durationSeconds = current.durationSeconds + 1)
-                    }
-                }
-            }
+            try {
+                val response = ApiClient.apiService.initiateCall(InitiateCallRequest(session.walletId, peerWalletId, isVideo))
+                val result = response.body()
+                val call = result?.call
+                check(response.isSuccessful && result?.success == true && call?.joinUrl != null) { result?.error ?: "Impossible de lancer l’appel." }
+                if (_activeCall.value?.roomId != pendingId) { ApiClient.apiService.endCall(call!!.id, EndCallRequest(session.walletId)); return@launch }
+                _activeCall.value = _activeCall.value?.copy(roomId = call!!.id)
+                _directCallUrl.value = call!!.joinUrl + "?accepted=1"
+            } catch(error: kotlinx.coroutines.CancellationException) { throw error }
+            catch(error: Exception) { if (_activeCall.value?.roomId == pendingId) { _activeCall.value = null; _directCallUrl.value = null }; _errorMessage.value = error.message }
         }
     }
 
@@ -1833,32 +1796,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun endCall() {
         val current = _activeCall.value
+        _activeCall.value = null
+        _directCallUrl.value = null
         voiceCallManager.stopVoiceSession()
         RingtoneHelper.stopCallRingtone(getApplication())
         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-
-        if (current != null) {
-            wsManager.sendCallSignaling(
-                event = "call.ended",
-                callId = current.roomId,
-                conversationId = null,
-                data = mapOf("peerWalletId" to current.peerWalletId)
-            )
-            if (current.durationSeconds > 0) {
-                viewModelScope.launch {
-                    repository.recordCall(
-                        peerName = current.peerName,
-                        isVideo = current.isVideo,
-                        isIncoming = false,
-                        isMissed = false,
-                        durationSeconds = current.durationSeconds,
-                        peerWalletId = current.peerWalletId.ifBlank { null },
-                        peerAvatar = current.peerAvatar
-                    )
-                }
-            }
+        val session = currentSession.value
+        if (current != null && !current.roomId.startsWith("pending_") && session != null) viewModelScope.launch {
+            try { ApiClient.apiService.endCall(current.roomId, EndCallRequest(session.walletId)) }
+            catch(error: Exception) { _errorMessage.value = "Fin d’appel non confirmée par le serveur. Vérifiez votre connexion." }
         }
-        _activeCall.value = null
     }
 
     // --- Ringtone Customization ---
@@ -1872,60 +1819,34 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun acceptIncomingCall() {
         val inc = _incomingCall.value ?: return
+        val session = currentSession.value ?: return
+        if (_activeCall.value != null) return
         _incomingCall.value = null
         RingtoneHelper.stopCallRingtone(getApplication())
         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-
-        // Send call.accepted signaling back to caller via WebSocket
-        wsManager.sendCallSignaling(
-            event = "call.accepted",
-            callId = inc.callId,
-            conversationId = null,
-            data = mapOf(
-                "peerWalletId" to inc.callerWalletId,
-                "callerWalletId" to inc.callerWalletId
-            )
-        )
-
-        startCall(
-            peerName = inc.callerName,
-            peerWalletId = inc.callerWalletId,
-            peerAvatar = inc.callerAvatar,
-            isVideo = inc.isVideo,
-            autoConnect = true
-        )
+        _activeCall.value = CallSessionState(inc.callId, inc.callerName, inc.callerWalletId, inc.callerAvatar, inc.isVideo)
+        viewModelScope.launch {
+            try {
+                val response = ApiClient.apiService.respondCall(inc.callId, RespondCallRequest(session.walletId, "ACCEPTED"))
+                val result = response.body()
+                val url = result?.call?.joinUrl
+                check(response.isSuccessful && result?.success == true && !url.isNullOrBlank()) { result?.error ?: "Cet appel n’est plus disponible." }
+                if (_activeCall.value?.roomId != inc.callId) { ApiClient.apiService.endCall(inc.callId, EndCallRequest(session.walletId)); return@launch }
+                _directCallUrl.value = url + "?accepted=1"
+            } catch(error: kotlinx.coroutines.CancellationException) { throw error }
+            catch(error: Exception) { _activeCall.value = null; _directCallUrl.value = null; _errorMessage.value = error.message }
+        }
     }
 
     fun declineIncomingCall() {
-        val inc = _incomingCall.value
+        val inc = _incomingCall.value ?: return
         _incomingCall.value = null
         RingtoneHelper.stopCallRingtone(getApplication())
         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-        if (inc != null) {
-            // Send call.rejected signaling back via WebSocket
-            wsManager.sendCallSignaling(
-                event = "call.rejected",
-                callId = inc.callId,
-                conversationId = null,
-                data = mapOf("peerWalletId" to inc.callerWalletId)
-            )
-            viewModelScope.launch {
-                repository.recordCall(
-                    peerName = inc.callerName,
-                    isVideo = inc.isVideo,
-                    isIncoming = true,
-                    isMissed = true,
-                    durationSeconds = 0,
-                    peerWalletId = inc.callerWalletId,
-                    peerAvatar = inc.callerAvatar
-                )
-                OnChatNotificationHelper.showMissedCallNotification(
-                    context = getApplication(),
-                    callerName = inc.callerName,
-                    callerWalletId = inc.callerWalletId.ifBlank { null },
-                    isVideo = inc.isVideo
-                )
-            }
+        val session = currentSession.value ?: return
+        viewModelScope.launch {
+            try { ApiClient.apiService.respondCall(inc.callId, RespondCallRequest(session.walletId,"REJECTED")) }
+            catch(error: Exception) { _errorMessage.value = "Refus non confirmé par le serveur." }
         }
     }
 

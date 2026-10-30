@@ -31,6 +31,14 @@ class OnChatBackgroundService : Service() {
         private const val NOTIF_CHANNEL_ID = "onchat_persistent_service"
         private const val NOTIF_ID = 7001
 
+        fun mediaState(context: Context, active: Boolean, video: Boolean = false) {
+            context.startService(Intent(context, OnChatBackgroundService::class.java).apply {
+                action = "ONCHAT_MEDIA_STATE"
+                putExtra("active", active)
+                putExtra("video", video)
+            })
+        }
+
         fun start(context: Context) {
             val intent = Intent(context, OnChatBackgroundService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -42,6 +50,7 @@ class OnChatBackgroundService : Service() {
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var mediaActive = false
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -166,7 +175,7 @@ class OnChatBackgroundService : Service() {
 
         val connected = OnChatWebSocketManager.getInstance().connectionStatus.value == com.example.data.api.WsConnectionStatus.CONNECTED
         return NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
-            .setContentTitle(if (connected) "OnChat connecté" else "Reconnexion OnChat…")
+            .setContentTitle(if (mediaActive) "Appel OnChat en cours" else if (connected) "OnChat connecté" else "Reconnexion OnChat…")
             .setContentText(if (connected) "Messages et appels en temps réel" else "Vérifiez votre connexion Internet")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
@@ -176,6 +185,20 @@ class OnChatBackgroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "ONCHAT_MEDIA_STATE") {
+            mediaActive = intent.getBooleanExtra("active", false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val microphone = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                val camera = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                var types = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                if (mediaActive && microphone) {
+                    types = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    if (intent.getBooleanExtra("video", false) && camera) types = types or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+                try { startForeground(NOTIF_ID, buildForegroundNotification(), types) }
+                catch(error: Exception) { Log.w(TAG, "Media foreground service unavailable", error) }
+            }
+        }
         OnChatWebSocketManager.getInstance().connect()
         return START_STICKY
     }
