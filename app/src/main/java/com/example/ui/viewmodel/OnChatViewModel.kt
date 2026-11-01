@@ -194,8 +194,9 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     val isSkeletonLoading: StateFlow<Boolean> = _isSkeletonLoading.asStateFlow()
 
     // Data streams
-    val conversations: StateFlow<List<Conversation>> = repository.conversationsFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val conversations: StateFlow<List<Conversation>> = combine(repository.conversationsFlow, wsManager.onlineUsers, wsManager.connectionStatus) { list, online, status ->
+        list.map { conversation -> conversation.copy(isOnline = status == com.example.data.api.WsConnectionStatus.CONNECTED && (conversation.contactWalletId?.let { online.contains(it) } == true), contactAvailabilityStatus = if (status == com.example.data.api.WsConnectionStatus.CONNECTED && (conversation.contactWalletId?.let { online.contains(it) } == true)) "online" else "offline") }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val groups: StateFlow<List<Group>> = repository.groupsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -282,6 +283,11 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         loadCountries()
         checkExistingSession()
         observeWebSocketEvents()
+        viewModelScope.launch {
+            wsManager.socialUpdates.collect { event ->
+                if (event.resolvedEvent == "video.published" || event.resolvedEvent == "social.follow.changed") fetchVideosFeed()
+            }
+        }
         wsManager.onReconnected = {
             fetchServerConversations()
             refreshWallet()
@@ -289,6 +295,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 repository.fetchGroups()
                 _activeConversationId.value?.takeIf { it.isNotBlank() }?.let {
                     repository.fetchConversationDetails(it)
+                    if (OnChatNotificationHelper.appInForeground) runCatching { repository.markConversationMessagesAsRead(it) }
                 }
             }
         }
@@ -343,6 +350,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                         conversationId = pair.first,
                         senderName = pair.second.senderName ?: "Nouveau message",
                         senderWalletId = null,
+                        senderAvatar = pair.second.senderAvatar,
                         messageText = when (pair.second.type) {
                             "audio" -> "Message vocal"
                             "image" -> "Photo"
@@ -414,8 +422,10 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     "chat.message.read", "chat.read" -> {
                         val conversationId = envelope.resolvedConversationId
                         val readerId = envelope.resolvedUserId
-                        if (conversationId != null && readerId != null && readerId != currentSession.value?.userId) {
-                            repository.markOutgoingMessagesAsRead(conversationId)
+                        if (conversationId != null && readerId != null) {
+                            if (readerId == currentSession.value?.userId) repository.markConversationReadLocally(conversationId)
+                            repository.fetchConversationDetails(conversationId)
+                            fetchServerConversations()
                         }
                     }
                     "call.accepted" -> {
@@ -529,16 +539,14 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             result.onSuccess { res ->
                 if (!res.success) { _errorMessage.value = res.error ?: "Abonnement refusé"; onComplete(false); return@onSuccess }
                 if (action == "follow" || action == "unfollow") _realVideosFeed.value = _realVideosFeed.value.map { item -> if (item.publisher?.type == "user" && item.publisher.id == userId) item.copy(follow = VideoFollowInfo(action == "follow")) else item }
+                if (action == "follow" || action == "unfollow") fetchVideosFeed()
                 onComplete(true)
                 // Update local public profile state with new relation/stats in nested object
                 val current = _publicProfile.value
                 val p = current?.profile
                 if (current != null && p != null) {
                     val newRelationship = res.relation?.let {
-                        RelationshipDto(
-                            isFollowing = it.following,
-                            isFollowedBy = it.isFriend
-                        )
+                        p.relationship?.copy(isFollowing = it.following) ?: RelationshipDto(isFollowing = it.following)
                     } ?: p.relationship
 
                     val newFollowers = res.stats?.let {
@@ -1250,6 +1258,29 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    val socialUpdates = wsManager.socialUpdates
+    private val _profileVideos = MutableStateFlow<Map<Long, List<VideoItem>>>(emptyMap())
+    val profileVideos = _profileVideos.asStateFlow()
+    private val _profileVideoMore = MutableStateFlow<Map<Long, Boolean>>(emptyMap())
+    val profileVideoMore = _profileVideoMore.asStateFlow()
+    private val loadingProfileVideos = mutableSetOf<Long>()
+    private val _profileVideosLoading = MutableStateFlow<Set<Long>>(emptySet())
+    val profileVideosLoading = _profileVideosLoading.asStateFlow()
+    fun fetchProfileVideos(userId: Long, append: Boolean = false) {
+        if (userId <= 0 || !loadingProfileVideos.add(userId)) return
+        _profileVideosLoading.value = loadingProfileVideos.toSet()
+        viewModelScope.launch {
+            val current = _profileVideos.value[userId].orEmpty()
+            try {
+                repository.fetchVideos(50, if (append) current.size else 0, userId).onSuccess { next ->
+                    val merged = if (append) current + next else next + current
+                    _profileVideos.value = _profileVideos.value + (userId to merged.distinctBy { it.id })
+                    if (append || current.isEmpty()) _profileVideoMore.value = _profileVideoMore.value + (userId to (next.size == 50))
+                }.onFailure { _errorMessage.value = "Vidéos du profil indisponibles. Réessayez." }
+            } finally { loadingProfileVideos.remove(userId); _profileVideosLoading.value = loadingProfileVideos.toSet() }
+        }
+    }
+
     fun fetchVideosFeed() {
         viewModelScope.launch {
             _isVideosLoading.value = true
@@ -1516,8 +1547,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun onEnterChat(conversationId: String) {
         _activeConversationId.value = conversationId
         viewModelScope.launch {
-            repository.markConversationMessagesAsRead(conversationId)
-            wsManager.sendReadReceipt(conversationId)
+            try { repository.markConversationMessagesAsRead(conversationId) }
+            catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; _errorMessage.value = error.message }
             // Force re-fetch to ensure UI gets updated state
             repository.fetchConversationDetails(conversationId)
         }

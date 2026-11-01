@@ -467,7 +467,7 @@ fun ReelItemView(
                         putExtra(Intent.EXTRA_SUBJECT, "Vidéo OnChat de @$creatorName")
                         putExtra(
                             Intent.EXTRA_TEXT,
-                            "Regarde cette vidéo sur OnChat : ${video.resolvedUrl}"
+                            "Regarde cette vidéo sur OnChat : https://app.cashpay-all.com/onchat/videos/${video.id}"
                         )
                     }
                     context.startActivity(Intent.createChooser(shareIntent, "Partager la vidéo OnChat via..."))
@@ -629,12 +629,12 @@ fun ReelsCommentsSheet(
     viewModel: OnChatViewModel,
     onDismiss: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState()
-    var newCommentText by remember { mutableStateOf("") }
-    var postingComment by remember { mutableStateOf(false) }
-    var commentError by remember { mutableStateOf<String?>(null) }
-    val commentsList = remember { mutableStateListOf<VideoCommentItem>() }
-    var isLoadingComments by remember { mutableStateOf(true) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var newCommentText by remember(video.id) { mutableStateOf("") }
+    var postingComment by remember(video.id) { mutableStateOf(false) }
+    var commentError by remember(video.id) { mutableStateOf<String?>(null) }
+    val commentsList = remember(video.id) { mutableStateListOf<VideoCommentItem>() }
+    var isLoadingComments by remember(video.id) { mutableStateOf(true) }
 
     LaunchedEffect(video.id) {
         isLoadingComments = true
@@ -642,6 +642,14 @@ fun ReelsCommentsSheet(
             commentsList.clear()
             commentsList.addAll(fetched)
             isLoadingComments = false
+        }
+    }
+
+    LaunchedEffect(video.id) {
+        viewModel.socialUpdates.collect { event ->
+            if ((event.data?.get("mediaId") as? Number)?.toLong() == video.id) {
+                viewModel.loadVideoComments(video.id, onFailure = { commentError = it }) { fetched -> commentsList.clear(); commentsList.addAll(fetched) }
+            }
         }
     }
 
@@ -654,7 +662,9 @@ fun ReelsCommentsSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.65f)
+                .fillMaxHeight(0.85f)
+                .imePadding()
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp)
         ) {
             Text(

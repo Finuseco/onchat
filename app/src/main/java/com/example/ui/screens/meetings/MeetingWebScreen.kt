@@ -41,7 +41,7 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = fal
     }
     BackHandler { val current = view; if (current?.canGoBack() == true) current.goBack() else onClose() }
     DisposableEffect(Unit) {
-        onDispose { if (directCall) { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) }; audioManager.mode = android.media.AudioManager.MODE_NORMAL; audioManager.isSpeakerphoneOn = false }; pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
+        onDispose { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) }; audioManager.mode = android.media.AudioManager.MODE_NORMAL; audioManager.isSpeakerphoneOn = false; pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
     }
     Column(Modifier.fillMaxSize()) {
         if (!directCall) Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
@@ -50,13 +50,14 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = fal
         AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = {
             WebView(context).apply {
                 view = this
-                if (directCall) {
+                run {
                     audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
                     audioManager.isSpeakerphoneOn = false
                     addJavascriptInterface(object {
                         @JavascriptInterface fun connectionUrl(): String = com.example.BuildConfig.ONCHAT_WS_URL
                         @JavascriptInterface fun setSpeaker(enabled: Boolean) { post { audioManager.isSpeakerphoneOn = enabled } }
                         @JavascriptInterface fun mediaState(video: Boolean) { post { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, true, video) } } }
+                        @JavascriptInterface fun mediaStopped() { post { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) } } }
                         @JavascriptInterface fun connected(value: Boolean) { post { connectedCallback(value) } }
                         @JavascriptInterface fun closeCall() { post { closeCallback() } }
                     }, "OnChatAudio")

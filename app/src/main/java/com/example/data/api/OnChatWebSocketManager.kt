@@ -88,6 +88,9 @@ class OnChatWebSocketManager private constructor() {
         webSocket?.send(org.json.JSONObject().put("event", "meet.unwatch").put("data", org.json.JSONObject().put("meetCode", code)).toString())
     }
 
+    private val _socialUpdates = MutableSharedFlow<WsEventEnvelope>(extraBufferCapacity = 32)
+    val socialUpdates: SharedFlow<WsEventEnvelope> = _socialUpdates.asSharedFlow()
+
     private val _incomingMessages = MutableSharedFlow<Pair<String, ApiMessage>>(extraBufferCapacity = 64)
     val incomingMessages: SharedFlow<Pair<String, ApiMessage>> = _incomingMessages.asSharedFlow()
 
@@ -259,6 +262,14 @@ class OnChatWebSocketManager private constructor() {
             val effectiveEvent = if ((eventType == "notification" || eventType == "punch" || eventType == "push") && !innerEvent.isNullOrBlank()) innerEvent else eventType
 
             when (effectiveEvent) {
+                "video.published", "video.comment.created", "social.follow.changed" -> if (envelope != null) coroutineScope.launch { _socialUpdates.emit(envelope) }
+                "presence.snapshot" -> {
+                    val users = dataMap?.get("users") as? List<*>
+                    _onlineUsers.value = users.orEmpty().flatMap { value ->
+                        val row = value as? Map<*, *> ?: return@flatMap emptyList<String>()
+                        listOfNotNull((row["userId"] as? Number)?.toLong()?.toString(), row["walletId"]?.toString())
+                    }.toSet()
+                }
                 "realtime.resync" -> onReconnected?.invoke()
                 "meet.updated" -> {
                     val code = dataMap?.get("meetCode")?.toString()
@@ -324,13 +335,13 @@ class OnChatWebSocketManager private constructor() {
                 "presence.online", "user.online" -> {
                     val uid = envelope?.resolvedWalletId ?: envelope?.resolvedUserId?.toString() ?: rawJsonObj?.optString("walletId")
                     if (uid != null) {
-                        _onlineUsers.value = _onlineUsers.value + uid
+                        _onlineUsers.value = _onlineUsers.value + listOfNotNull(uid, envelope?.resolvedUserId?.toString())
                     }
                 }
                 "presence.offline", "user.offline" -> {
                     val uid = envelope?.resolvedWalletId ?: envelope?.resolvedUserId?.toString() ?: rawJsonObj?.optString("walletId")
                     if (uid != null) {
-                        _onlineUsers.value = _onlineUsers.value - uid
+                        _onlineUsers.value = _onlineUsers.value - listOfNotNull(uid, envelope?.resolvedUserId?.toString()).toSet()
                     }
                 }
 
@@ -431,7 +442,7 @@ class OnChatWebSocketManager private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing WS message: ${e.message} text: $text")
+            Log.w(TAG, "Événement temps réel indécodable")
         }
     }
 
@@ -449,7 +460,10 @@ class OnChatWebSocketManager private constructor() {
     }
 
     fun sendReadReceipt(conversationId: String) {
-        if (_connectionStatus.value != WsConnectionStatus.CONNECTED) return
+        if (_connectionStatus.value != WsConnectionStatus.CONNECTED) {
+            coroutineScope.launch { runCatching { ApiClient.apiService.markChatRead(conversationId) } }
+            return
+        }
         try {
             val json = org.json.JSONObject().put("event", "chat.read").put("data",
                 org.json.JSONObject().put("conversationId", conversationId)).toString()

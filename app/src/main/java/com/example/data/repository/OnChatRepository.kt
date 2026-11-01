@@ -1086,8 +1086,8 @@ class OnChatRepository(private val context: Context) {
                 val response = ApiClient.apiService.getGroupDetails(groupId)
                 val group = response.body()?.group
                 if (!response.isSuccessful || response.body()?.success != true || group == null) error("Discussion de groupe inaccessible")
-                val localIds = messageDao.getMessagesFlow(conversationId).firstOrNull().orEmpty().map { it.id }.toSet()
-                group.messages.filter { it.id !in localIds }.forEach { insertWebSocketMessage(conversationId, it) }
+                val local = messageDao.getMessagesFlow(conversationId).firstOrNull().orEmpty().associateBy { it.id }
+                group.messages.filter { local[it.id] == null || local[it.id]?.status != it.status || local[it.id]?.content != it.content || local[it.id]?.fileUrl != it.resolvedFileUrl }.forEach { insertWebSocketMessage(conversationId, it) }
                 return@withContext Result.success(Unit)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
             catch (e: Exception) { return@withContext Result.failure(e) }
@@ -1584,7 +1584,7 @@ class OnChatRepository(private val context: Context) {
                 fileName = returnedMsg.resolvedFileName ?: fileName
             ))
         } catch (e: Exception) {
-            messageDao.insertMessage(entity.copy(status = "failed"))
+            withContext(kotlinx.coroutines.NonCancellable) { messageDao.insertMessage(entity.copy(status = "failed")) }
             throw e
         }
     }
@@ -1930,6 +1930,12 @@ class OnChatRepository(private val context: Context) {
     }
 
     suspend fun markConversationMessagesAsRead(conversationId: String) = withContext(Dispatchers.IO) {
+        val response = ApiClient.apiService.markChatRead(conversationId)
+        check(response.isSuccessful && response.body()?.success == true) { "Lecture non confirmée. Réessayez." }
+        markConversationReadLocally(conversationId)
+    }
+
+    suspend fun markConversationReadLocally(conversationId: String) = withContext(Dispatchers.IO) {
         readConversationsSet.add(conversationId)
         messageDao.markConversationMessagesAsRead(conversationId)
         val conv = conversationDao.getConversationSync(conversationId)
@@ -1996,11 +2002,11 @@ class OnChatRepository(private val context: Context) {
 
     // --- CashPay Real Video Engine API Methods ---
 
-    suspend fun fetchVideos(limit: Int = 20, offset: Int = 0): Result<List<VideoItem>> = withContext(Dispatchers.IO) {
+    suspend fun fetchVideos(limit: Int = 20, offset: Int = 0, publisherId: Long? = null): Result<List<VideoItem>> = withContext(Dispatchers.IO) {
         val url = "https://app.cashpay-all.com/api/v1/media/videos?limit=$limit&offset=$offset"
         Log.d("VideoAPI", "GET $url | Token present: ${!ApiClient.authToken.isNullOrBlank()}")
         try {
-            val response = ApiClient.apiService.getVideos(limit, offset)
+            val response = ApiClient.apiService.getVideos(limit, offset, publisherId)
             Log.d("VideoAPI", "GET $url -> HTTP ${response.code()}")
             if (response.isSuccessful && response.body() != null) {
                 val videos = response.body()!!.videos

@@ -87,6 +87,9 @@ interface OnChatApiService {
         @Query("phone") phone: String
     ): Response<PhoneProfileResponse>
 
+    @POST("api/v1/chat/conversations/{conversationId}/read")
+    suspend fun markChatRead(@Path("conversationId") conversationId: String): Response<SimpleResponse>
+
     @POST("api/v1/social/action")
     suspend fun performSocialAction(
         @Body request: SocialActionRequest
@@ -418,7 +421,8 @@ interface OnChatApiService {
     @GET("api/v1/media/videos")
     suspend fun getVideos(
         @Query("limit") limit: Int? = 20,
-        @Query("offset") offset: Int? = 0
+        @Query("offset") offset: Int? = 0,
+        @Query("publisherId") publisherId: Long? = null
     ): Response<VideoListResponse>
 
     @GET("api/v1/media/videos/{id}")

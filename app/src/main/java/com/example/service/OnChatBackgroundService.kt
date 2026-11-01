@@ -135,6 +135,15 @@ class OnChatBackgroundService : Service() {
             }
         }
 
+        serviceScope.launch {
+            wsManager.socialUpdates.collect { event ->
+                if (event.resolvedEvent == "video.published") {
+                    val id = (event.data?.get("mediaId") as? Number)?.toLong() ?: return@collect
+                    val publisher = (event.data?.get("publisherId") as? Number)?.toLong()
+                    if (publisher != OnChatNotificationHelper.signedInUserId) OnChatNotificationHelper.showVideoPublishedNotification(applicationContext,id,event.data?.get("publisherName")?.toString() ?: "Votre créateur suivi",event.data?.get("publisherAvatar")?.toString())
+                }
+            }
+        }
         // 2. Incoming messages
         serviceScope.launch {
             val repository = com.example.data.repository.OnChatRepository(applicationContext)
@@ -153,6 +162,7 @@ class OnChatBackgroundService : Service() {
                     conversationId = pair.first,
                     senderName = pair.second.senderName ?: "Message OnChat",
                     senderWalletId = null,
+                    senderAvatar = pair.second.senderAvatar,
                     messageText = when (pair.second.type) {
                         "audio" -> "Message vocal"
                         "image" -> "Photo"

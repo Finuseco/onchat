@@ -41,6 +41,7 @@
         android:usesCleartextTraffic="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         
+        <receiver android:name=".service.NotificationReplyReceiver" android:exported="false" />
         <service android:name=".service.OnChatBackgroundService" android:exported="false" android:foregroundServiceType="dataSync|microphone|camera" />
         <provider
             android:name="androidx.core.content.FileProvider"

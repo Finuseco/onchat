@@ -44,7 +44,9 @@ fun PublicProfileScreen(
     val profileResp by viewModel.publicProfile.collectAsState()
     val searchedProfile by viewModel.searchedProfile.collectAsState()
     val conversations by viewModel.conversations.collectAsState()
-    val realVideosFeed by viewModel.realVideosFeed.collectAsState()
+    val profileVideos by viewModel.profileVideos.collectAsState()
+    val profileVideoMore by viewModel.profileVideoMore.collectAsState()
+    val profileVideosLoading by viewModel.profileVideosLoading.collectAsState()
     val isLoading by viewModel.isPublicProfileLoading.collectAsState()
     val context = LocalContext.current
 
@@ -106,21 +108,23 @@ fun PublicProfileScreen(
     val media = profileResp?.media ?: emptyList()
 
     var isFollowing by remember(relation) {
-        mutableStateOf(relation?.following == true || relation?.isFriend == true)
+        mutableStateOf(relation?.following == true)
     }
 
     var selectedVideoForPlayback by remember { mutableStateOf<VideoItem?>(null) }
     var selectedMediaTab by remember { mutableIntStateOf(0) } // 0: Vidées, 1: Photos
 
     // Filter user's published videos from feed
-    val userVideos = remember(realVideosFeed, targetUserId, phone) {
-        realVideosFeed.filter { video ->
-            val pub = video.publisher
-            val pubId = pub?.id ?: pub?.ownerId
-            val pubPhone = pub?.phone
-            (targetUserId != 0L && pubId == targetUserId) || (!phone.isNullOrBlank() && pubPhone == phone)
+    val userVideos = profileVideos[targetUserId].orEmpty()
+    LaunchedEffect(targetUserId) {
+        if (targetUserId > 0) {
+            viewModel.fetchProfileVideos(targetUserId)
+            viewModel.socialUpdates.collect { event ->
+                if ((event.data?.get("publisherId") as? Number)?.toLong() == targetUserId) viewModel.fetchProfileVideos(targetUserId)
+            }
         }
     }
+    var followingBusy by remember(targetUserId) { mutableStateOf(false) }
 
     if (selectedVideoForPlayback != null) {
         Box(
@@ -438,11 +442,14 @@ fun PublicProfileScreen(
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.clickable {
-                                isFollowing = !isFollowing
-                                val action = if (isFollowing) "follow" else "unfollow"
-                                viewModel.performSocialAction(targetUserId, action)
-                                val msg = if (isFollowing) "Abonné à $fullName ! 🔔" else "Désabonné"
-                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                if (!followingBusy && targetUserId > 0) {
+                                    followingBusy = true
+                                    val next = !isFollowing
+                                    viewModel.performSocialAction(targetUserId, if (next) "follow" else "unfollow", onComplete = { success ->
+                                        followingBusy = false
+                                        if (success) { isFollowing = next; Toast.makeText(context, if(next) "Abonnement enregistré" else "Désabonnement enregistré", Toast.LENGTH_SHORT).show() }
+                                    })
+                                }
                             }
                         ) {
                             Box(
@@ -533,8 +540,13 @@ fun PublicProfileScreen(
 
                     // Media Content Grid
                     if (selectedMediaTab == 0) {
+                        if (profileVideoMore[targetUserId] == true) {
+                            TextButton(enabled = targetUserId !in profileVideosLoading, onClick = { viewModel.fetchProfileVideos(targetUserId, true) }) { Text("Charger les vidéos suivantes", color = OnChatCyan) }
+                        }
                         // Vidéos Section with Views & Comments
-                        if (userVideos.isEmpty()) {
+                        if (userVideos.isEmpty() && targetUserId in profileVideosLoading) {
+                            CircularProgressIndicator(color = OnChatCyan)
+                        } else if (userVideos.isEmpty()) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
