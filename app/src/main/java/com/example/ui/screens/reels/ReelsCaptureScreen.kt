@@ -31,7 +31,7 @@ import java.io.File
 
 @SuppressLint("MissingPermission")
 @Composable
-fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) -> Unit) {
+fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) -> Unit, soundtrack: String? = null) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val executor = remember { ContextCompat.getMainExecutor(context) }
@@ -69,6 +69,9 @@ fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) ->
         onDispose { disposed = true; if (future.isDone) runCatching { future.get().unbindAll() } }
     }
     DisposableEffect(Unit) { onDispose { recording?.close() } }
+    val soundtrackPlayer=remember(soundtrack){soundtrack?.takeIf{it.isNotBlank()}?.let{source->androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply{setMediaItem(androidx.media3.common.MediaItem.fromUri(source));repeatMode=androidx.media3.common.Player.REPEAT_MODE_ONE;prepare()}}}
+    DisposableEffect(soundtrackPlayer){onDispose{soundtrackPlayer?.release()}}
+    LaunchedEffect(recording!=null,soundtrackPlayer){soundtrackPlayer?.playWhenReady=recording!=null}
     LaunchedEffect(recording != null) {
         seconds = 0
         while (recording != null) { delay(1000); seconds++; if (seconds >= limit) { recording?.stop(); recording = null; finalizing = true } }

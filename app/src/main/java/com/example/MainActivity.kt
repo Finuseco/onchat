@@ -42,10 +42,12 @@ import com.example.ui.viewmodel.LoginStep
 class MainActivity : ComponentActivity() {
 
     private var pendingNotificationConversation by mutableStateOf<String?>(null)
+    private var pendingVideoId by mutableStateOf<Long?>(null)
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        pendingVideoId = com.example.data.api.VideoLinks.videoId(intent.dataString)
         pendingNotificationConversation = intent.getStringExtra(com.example.util.OnChatNotificationHelper.EXTRA_CONVERSATION_ID)
     }
 
@@ -61,6 +63,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingVideoId = com.example.data.api.VideoLinks.videoId(intent.dataString)
         pendingNotificationConversation = intent.getStringExtra(com.example.util.OnChatNotificationHelper.EXTRA_CONVERSATION_ID)
 
         setContent {
@@ -73,6 +76,7 @@ class MainActivity : ComponentActivity() {
                 val incomingCall by viewModel.incomingCall.collectAsState()
                 val activeConversationId by viewModel.activeConversationId.collectAsState()
 
+                var videoToOpen by remember { mutableStateOf<Long?>(null) }
                 var currentScreen by remember { mutableStateOf("main") }
                 var currentTab by remember { mutableStateOf(OnChatTab.CHATS) }
                 var profilePhoneTarget by remember { mutableStateOf("") }
@@ -96,6 +100,10 @@ class MainActivity : ComponentActivity() {
                         stopService(android.content.Intent(this@MainActivity, com.example.service.OnChatBackgroundService::class.java))
                         com.example.util.OnChatNotificationHelper.signedInUserId = null
                     }
+                }
+
+                LaunchedEffect(loginStep,pendingVideoId) {
+                    if(loginStep==LoginStep.AUTHENTICATED && pendingVideoId!=null){videoToOpen=pendingVideoId;pendingVideoId=null;currentScreen="reels"}
                 }
 
                 LaunchedEffect(loginStep, pendingNotificationConversation) {
@@ -321,10 +329,10 @@ class MainActivity : ComponentActivity() {
                                 "reels" -> {
                                     LiveReelsScreen(
                                         viewModel = viewModel,
-                                        onBack = { currentScreen = "main" },
+                                        initialVideoId = videoToOpen,
+                                        onBack = { videoToOpen=null; currentScreen = "main" },
                                         onOpenOwnProfile = {
-                                            profilePhoneTarget = viewModel.userPhone.value
-                                            currentScreen = "profile"
+                                            currentScreen = "media_profile"
                                         },
                                         onOpenCreatorProfile = { phone ->
                                             profilePhoneTarget = phone
@@ -332,6 +340,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     )
                                 }
+                                "media_profile" -> com.example.ui.screens.reels.OwnMediaProfileScreen(viewModel,onBack={currentScreen="reels"},onVideo={id->videoToOpen=id;currentScreen="reels"})
                                 "publish" -> {
                                     VideoPublishScreen(
                                         viewModel = viewModel,

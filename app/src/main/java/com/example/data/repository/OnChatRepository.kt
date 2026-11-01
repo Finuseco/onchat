@@ -2002,11 +2002,11 @@ class OnChatRepository(private val context: Context) {
 
     // --- CashPay Real Video Engine API Methods ---
 
-    suspend fun fetchVideos(limit: Int = 20, offset: Int = 0, publisherId: Long? = null): Result<List<VideoItem>> = withContext(Dispatchers.IO) {
+    suspend fun fetchVideos(limit: Int = 20, offset: Int = 0, publisherId: Long? = null, feed: String = "mine"): Result<List<VideoItem>> = withContext(Dispatchers.IO) {
         val url = "https://app.cashpay-all.com/api/v1/media/videos?limit=$limit&offset=$offset"
         Log.d("VideoAPI", "GET $url | Token present: ${!ApiClient.authToken.isNullOrBlank()}")
         try {
-            val response = ApiClient.apiService.getVideos(limit, offset, publisherId)
+            val response = ApiClient.apiService.getVideos(limit, offset, publisherId, feed)
             Log.d("VideoAPI", "GET $url -> HTTP ${response.code()}")
             if (response.isSuccessful && response.body() != null) {
                 val videos = response.body()!!.videos

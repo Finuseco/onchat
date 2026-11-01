@@ -11,6 +11,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,7 +52,7 @@ fun AvatarBadge(
         Pair(Color(0xFF6B21A8), Color(0xFFA855F7)),
         Pair(Color(0xFF831843), Color(0xFFEC4899))
     )
-    val colorIndex = Math.abs(name.hashCode()) % colors.size
+    val colorIndex = (name.hashCode() and Int.MAX_VALUE) % colors.size
     val gradient = Brush.linearGradient(listOf(colors[colorIndex].first, colors[colorIndex].second))
 
     Box(
@@ -79,9 +82,11 @@ fun AvatarBadge(
                 else "https://app.cashpay-all.com/$avatarUrl"
             }
 
-            if (!fullAvatarUrl.isNullOrEmpty()) {
+            var imageFailed by remember(fullAvatarUrl) { mutableStateOf(false) }
+            if (!fullAvatarUrl.isNullOrEmpty() && !imageFailed) {
                 AsyncImage(
                     model = fullAvatarUrl,
+                    onError = { imageFailed = true },
                     contentDescription = name,
                     modifier = Modifier
                         .fillMaxSize()

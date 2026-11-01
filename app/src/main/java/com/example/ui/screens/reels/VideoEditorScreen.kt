@@ -103,7 +103,7 @@ fun VideoEditorScreen(
     val currentDuration = (if (sourceIsPhoto) secondsPerPhoto else totalDurationSeconds * (trimEndRatio - trimStartRatio) / playbackSpeed) + photos.size * secondsPerPhoto
 
     // 2. Audio & Sound
-    var isAudioMuted by remember { mutableStateOf(false) }
+    var isAudioMuted by remember { mutableStateOf(reusedSound != null) }
     var audioVolume by remember { mutableFloatStateOf(1.0f) }
     var musicVolume by remember { mutableFloatStateOf(0.7f) }
     var selectedMusicTitle by remember { mutableStateOf(reusedSound?.let { "${it.title} • ${it.authorName}" } ?: "Son original") }

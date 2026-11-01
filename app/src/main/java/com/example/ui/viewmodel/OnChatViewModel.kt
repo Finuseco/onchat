@@ -1250,16 +1250,59 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     // --- CashPay Real Videos Feed Actions ---
 
     private var hasMoreVideos = true
+    private val _videoFeed = MutableStateFlow("mine")
+    val videoFeed = _videoFeed.asStateFlow()
+    private var videoFeedEpoch = 0
+    fun selectVideoFeed(feed:String) {
+        if (feed !in setOf("mine","following","explore","favorites")) return
+        _videoFeed.value=feed
+        fetchVideosFeed()
+    }
+    suspend fun openSharedVideo(id:Long) {
+        val epoch=++videoFeedEpoch
+        _videoFeed.value="explore"
+        _realVideosFeed.value=emptyList()
+        _isVideosLoading.value=true
+        try {
+            val response=com.example.data.api.ApiClient.apiService.getVideoDetail(id)
+            val video=response.body()?.video
+            if(epoch!=videoFeedEpoch)return
+            if(!response.isSuccessful || response.body()?.success!=true || video==null) { _errorMessage.value="Vidéo indisponible";return }
+            _realVideosFeed.value=listOf(video)
+            hasMoreVideos=false
+        } catch(error:Exception) {if(error is kotlinx.coroutines.CancellationException)throw error;if(epoch==videoFeedEpoch)_errorMessage.value="Vidéo indisponible. Vérifiez votre connexion."}
+        finally {if(epoch==videoFeedEpoch)_isVideosLoading.value=false}
+    }
+    suspend fun setOriginalSoundRights(id:Long,enabled:Boolean):com.example.data.model.ReusableSound {
+        val response=com.example.data.api.ApiClient.apiService.updateOriginalSound(id,mapOf("allowReuse" to enabled,"rightsConfirmed" to enabled))
+        return response.body()?.takeIf {response.isSuccessful && it.success}?.sound ?: error("Impossible de modifier les droits du son.")
+    }
+    fun toggleVideoFavorite(id:Long,selected:Boolean,onComplete:(Boolean)->Unit={}) {
+        viewModelScope.launch {
+            try {
+                val response=if(selected)com.example.data.api.ApiClient.apiService.unfavoriteVideo(id) else com.example.data.api.ApiClient.apiService.favoriteVideo(id)
+                val body=response.body()?.takeIf {response.isSuccessful && it.success} ?: error("Favoris non confirmés")
+                fun update(video:VideoItem)=if(video.id==id)video.copy(interactions=(video.interactions?:VideoInteractions()).copy(isFavorite=body.isFavorite,favorites=body.favorites)) else video
+                _realVideosFeed.value=_realVideosFeed.value.map(::update)
+                _profileVideos.value=_profileVideos.value.mapValues {(_,list)->list.map(::update)}
+                if(_videoFeed.value=="favorites" && !body.isFavorite)_realVideosFeed.value=_realVideosFeed.value.filterNot{it.id==id}
+                onComplete(true)
+            } catch(error:Exception) {if(error is kotlinx.coroutines.CancellationException)throw error;_errorMessage.value="Favoris indisponibles. Réessayez.";onComplete(false)}
+        }
+    }
     fun loadMoreVideos() {
         if (_isVideosLoading.value || !hasMoreVideos) return
+        val epoch=videoFeedEpoch
+        val feed=_videoFeed.value
         viewModelScope.launch {
             _isVideosLoading.value = true
             try {
-                repository.fetchVideos(limit = 50, offset = _realVideosFeed.value.size).onSuccess { next ->
+                repository.fetchVideos(limit = 50, offset = _realVideosFeed.value.size,feed=feed).onSuccess { next ->
+                    if(epoch!=videoFeedEpoch)return@onSuccess
                     hasMoreVideos = next.size == 50
                     _realVideosFeed.value = (_realVideosFeed.value + next).distinctBy { it.id }
-                }.onFailure { _errorMessage.value = "Chargement des vidéos impossible." }
-            } finally { _isVideosLoading.value = false }
+                }.onFailure { if(epoch==videoFeedEpoch)_errorMessage.value = "Chargement des vidéos impossible." }
+            } finally { if(epoch==videoFeedEpoch)_isVideosLoading.value = false }
         }
     }
 
@@ -1287,16 +1330,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun fetchVideosFeed() {
+        val epoch=++videoFeedEpoch
+        val feed=_videoFeed.value
+        _realVideosFeed.value=emptyList()
         viewModelScope.launch {
-            _isVideosLoading.value = true
-            val result = repository.fetchVideos(limit = 50, offset = 0)
-            _isVideosLoading.value = false
-            result.onSuccess { list ->
-                _realVideosFeed.value = list
-                hasMoreVideos = list.size == 50
-            }.onFailure { err ->
-                Log.w("OnChatViewModel", "fetchVideosFeed error: ${err.message}")
-            }
+            _isVideosLoading.value=true
+            try {
+                repository.fetchVideos(limit=50,offset=0,feed=feed).onSuccess {list->
+                    if(epoch==videoFeedEpoch){_realVideosFeed.value=list;hasMoreVideos=list.size==50}
+                }.onFailure {if(epoch==videoFeedEpoch)_errorMessage.value="Chargement des vidéos impossible."}
+            } finally {if(epoch==videoFeedEpoch)_isVideosLoading.value=false}
         }
     }
 

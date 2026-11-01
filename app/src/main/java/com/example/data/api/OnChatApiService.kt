@@ -421,11 +421,19 @@ interface OnChatApiService {
     @GET("api/v1/media/videos/{id}/sound")
     suspend fun getReusableSound(@Path("id") id: Long): Response<SoundResponse>
 
+    @PATCH("api/v1/media/videos/{id}/sound")
+    suspend fun updateOriginalSound(@Path("id") id:Long, @Body body:Map<String, @JvmSuppressWildcards Any>): Response<SoundResponse>
+    @PUT("api/v1/media/videos/{id}/favorite")
+    suspend fun favoriteVideo(@Path("id") id:Long):Response<VideoFavoriteResponse>
+    @DELETE("api/v1/media/videos/{id}/favorite")
+    suspend fun unfavoriteVideo(@Path("id") id:Long):Response<VideoFavoriteResponse>
+
     @GET("api/v1/media/videos")
     suspend fun getVideos(
         @Query("limit") limit: Int? = 20,
         @Query("offset") offset: Int? = 0,
-        @Query("publisherId") publisherId: Long? = null
+        @Query("publisherId") publisherId: Long? = null,
+        @Query("feed") feed: String = "mine"
     ): Response<VideoListResponse>
 
     @GET("api/v1/media/videos/{id}")

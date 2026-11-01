@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 fun LiveReelsScreen(
     viewModel: OnChatViewModel,
     onBack: () -> Unit,
+    initialVideoId: Long? = null,
     onOpenOwnProfile: (() -> Unit)? = null,
     onOpenCreatorProfile: ((String) -> Unit)? = null
 ) {
@@ -60,14 +61,12 @@ fun LiveReelsScreen(
     val session by viewModel.currentSession.collectAsState()
     val context = LocalContext.current
 
-    LaunchedEffect(Unit) {
-        viewModel.fetchVideosFeed()
+    val feed by viewModel.videoFeed.collectAsState()
+    val selectedTab=when(feed){"explore"->0;"following"->1;"favorites"->3;else->2}
+    LaunchedEffect(initialVideoId) {
+        if(initialVideoId!=null)viewModel.openSharedVideo(initialVideoId) else viewModel.fetchVideosFeed()
     }
-
-    var selectedTab by remember { mutableIntStateOf(2) }
-    val validVideos = remember(realVideos, selectedTab) {
-        realVideos.filter { it.resolvedUrl.isNotBlank() && (selectedTab != 1 || it.follow?.isFollowing == true) }
-    }
+    val validVideos=realVideos.filter {it.resolvedUrl.isNotBlank()}
     val pagerState = rememberPagerState(pageCount = { validVideos.size.coerceAtLeast(1) })
     LaunchedEffect(pagerState.settledPage, validVideos.size, selectedTab) {
         if (realVideos.isNotEmpty() && pagerState.settledPage >= validVideos.size - 4) viewModel.loadMoreVideos()
@@ -83,6 +82,7 @@ fun LiveReelsScreen(
 
     if (showCaptureScreen) {
         ReelsCaptureScreen(
+            soundtrack = reusedSound?.url,
             onClose = { showCaptureScreen = false },
             onMediaSelected = { uri, type ->
                 showCaptureScreen = false
@@ -227,6 +227,7 @@ fun LiveReelsScreen(
                 }
 
                 // Tabs: Explorer, Suivis, Pour toi
+                IconButton(onClick={viewModel.selectVideoFeed("favorites")}){Icon(Icons.Default.Bookmark,contentDescription="Mes favoris",tint=if(feed=="favorites")OnChatCyan else Color.White)}
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -234,7 +235,7 @@ fun LiveReelsScreen(
                     listOf("Explorer", "Suivis", "Pour toi").forEachIndexed { index, tab ->
                         Column(
                             horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.clickable { selectedTab = index }
+                            modifier = Modifier.clickable { viewModel.selectVideoFeed(listOf("explore","following","mine")[index]) }
                         ) {
                             Text(
                                 text = tab,
@@ -337,7 +338,8 @@ fun ReelItemView(
     val isLiked = video.interactions?.realIsLiked == true
     val likesCount = video.interactions?.realLikesCount ?: 0
     val commentsCount = video.interactions?.comments ?: 0
-    var isBookmarked by remember { mutableStateOf(false) }
+    val isBookmarked = video.interactions?.isFavorite == true
+    var favoriteBusy by remember(video.id) { mutableStateOf(false) }
     var isFollowing by remember(video) { mutableStateOf(video.follow?.isFollowing == true) }
 
     val creatorName = video.publisher?.resolvedName ?: "Créateur OnChat"
@@ -402,7 +404,7 @@ fun ReelItemView(
                         modifier = Modifier.border(1.5.dp, Color.White, CircleShape)
                     )
                 }
-                Box(
+                if(creatorId != session?.userId) Box(
                     modifier = Modifier
                         .offset(y = 8.dp)
                         .size(22.dp)
@@ -445,15 +447,10 @@ fun ReelItemView(
             // Bookmark / Favorites
             InteractionButton(
                 icon = Icons.Default.Bookmark,
-                label = if (isBookmarked) "1" else "0",
+                label = formatCount(video.interactions?.favorites ?: 0),
                 iconColor = if (isBookmarked) Color(0xFFFFD700) else Color.White,
                 onClick = {
-                    isBookmarked = !isBookmarked
-                    Toast.makeText(
-                        context,
-                        if (isBookmarked) "Ajouté aux favoris ⭐" else "Retiré des favoris",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    if(!favoriteBusy){favoriteBusy=true;viewModel.toggleVideoFavorite(video.id,isBookmarked){favoriteBusy=false}}
                 }
             )
 
@@ -490,8 +487,8 @@ fun ReelItemView(
 
             // Spinning Vinyl Disc with Creator Avatar
             MusicDiscAnimation(
-                avatarUrl = creatorAvatar,
-                userName = creatorName,
+                avatarUrl = video.sound?.authorAvatar ?: creatorAvatar,
+                userName = video.sound?.authorName ?: creatorName,
                 onClick = onOpenSound
             )
         }
@@ -536,7 +533,7 @@ fun ReelItemView(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Son original - $creatorName",
+                    text = video.sound?.let { "${it.title} • ${it.authorName}" } ?: "Son original - $creatorName",
                     color = Color.White,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
@@ -822,6 +819,9 @@ fun ReelSoundBottomSheet(
         catch (error: Exception) { soundError = error.message }
         finally { loading = false }
     }
+    val ownerSession by viewModel.currentSession.collectAsState()
+    var rightsConfirmed by remember(video.id){mutableStateOf(false)}
+    val rightsScope=rememberCoroutineScope()
     val authorName = sound?.authorName ?: video.publisher?.resolvedName ?: "Créateur OnChat"
 
     ModalBottomSheet(
@@ -858,6 +858,10 @@ fun ReelSoundBottomSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            if(video.publisher?.id==ownerSession?.userId && (sound==null || sound?.authorId==ownerSession?.userId && sound?.sourceId==video.id)) {
+                Row(verticalAlignment=Alignment.CenterVertically){Checkbox(checked=rightsConfirmed,onCheckedChange={rightsConfirmed=it});Text("Je détiens les droits de ce son original",modifier=Modifier.weight(1f))}
+                TextButton(enabled=rightsConfirmed&&!loading,onClick={rightsScope.launch{loading=true;try{sound=viewModel.setOriginalSoundRights(video.id,sound?.allowReuse!=true);soundError=null}catch(e:Exception){soundError=e.message}finally{loading=false}}}){Text(if(sound?.allowReuse==true)"Retirer l’autorisation de réutilisation" else "Autoriser la réutilisation avec mon crédit")}
+            }
             // Action Buttons
             Button(
                 onClick = { sound?.takeIf { it.allowReuse }?.let(onUseSound) },
@@ -875,7 +879,7 @@ fun ReelSoundBottomSheet(
 
             OutlinedButton(
                 onClick = {
-                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(android.content.Intent.EXTRA_TEXT, "${sound?.title ?: "Vidéo OnChat"} • $authorName\n${video.resolvedUrl}") }
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(android.content.Intent.EXTRA_TEXT, "${sound?.title ?: "Vidéo OnChat"} • $authorName\nhttps://app.cashpay-all.com/onchat/videos/${video.id}") }
                     context.startActivity(android.content.Intent.createChooser(send, "Partager la vidéo et son auteur"))
                 },
                 modifier = Modifier.fillMaxWidth(),

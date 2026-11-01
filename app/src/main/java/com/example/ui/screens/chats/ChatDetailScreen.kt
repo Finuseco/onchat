@@ -675,7 +675,7 @@ fun ChatDetailScreen(
                 showTransferModal = true
             },
             onSendLocation = { title, subtitle, lat, lng ->
-                viewModel.sendMessage("$title • $subtitle", type = "location")
+                viewModel.sendMessage("$title • $subtitle\nhttps://www.google.com/maps?q=$lat,$lng", type = "location", metadata = mapOf("latitude" to lat.toString(), "longitude" to lng.toString(), "title" to title, "accuracyDescription" to subtitle))
             },
             onSendFile = { fileName, fileType, _, uri ->
                 if (uri != null) viewModel.sendAttachment(uri, fileName, fileType)
