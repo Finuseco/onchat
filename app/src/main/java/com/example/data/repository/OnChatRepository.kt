@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import androidx.room.withTransaction
 import android.content.Context
 import android.util.Log
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -1147,9 +1148,9 @@ class OnChatRepository(private val context: Context) {
                     var transferRef: String? = null
 
                     if (apiMsg.type == "in_chat_transfer" && apiMsg.metadata != null) {
-                        transferAmount = apiMsg.metadata["amount"]?.toDoubleOrNull()
-                        transferCurrency = apiMsg.metadata["currency"]
-                        transferRef = apiMsg.metadata["reference"]
+                        transferAmount = apiMsg.metadata["amount"]?.toString()?.toDoubleOrNull()
+                        transferCurrency = apiMsg.metadata["currency"]?.toString()
+                        transferRef = apiMsg.metadata["reference"]?.toString()
                     }
 
                     MessageEntity(
@@ -1165,8 +1166,9 @@ class OnChatRepository(private val context: Context) {
                         status = apiMsg.status ?: "delivered",
                         isEdited = false,
                         type = apiMsg.type,
-                        fileUrl = apiMsg.fileUrl,
-                        fileName = apiMsg.fileName,
+                        metadataJson = apiMsg.metadata?.let { org.json.JSONObject(it).toString() },
+                        fileUrl = apiMsg.resolvedFileUrl,
+                        fileName = apiMsg.resolvedFileName,
                         transferAmount = transferAmount,
                         transferCurrency = transferCurrency,
                         transferReference = transferRef
@@ -1178,10 +1180,11 @@ class OnChatRepository(private val context: Context) {
                 }
                 Result.success(Unit)
             } else {
-                Result.success(Unit)
+                Result.failure(IllegalStateException("Synchronisation des messages refusée (${response.code()})."))
             }
         } catch (e: Exception) {
-            Result.success(Unit)
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            Result.failure(e)
         }
     }
 
@@ -1401,8 +1404,9 @@ class OnChatRepository(private val context: Context) {
         conversationId: String,
         apiMsg: ApiMessage
     ) = withContext(Dispatchers.IO) {
-        val session = sessionDao.getSession()
-        val currentUserId = session?.userId?.toString() ?: "1"
+        val session = sessionDao.getSession() ?: return@withContext
+        db.withTransaction {
+        val currentUserId = session.userId.toString()
         val isMine = apiMsg.senderId == session?.userId
 
         val timestamp = try {
@@ -1419,11 +1423,12 @@ class OnChatRepository(private val context: Context) {
         var transferRef: String? = null
 
         if (apiMsg.type == "in_chat_transfer" && apiMsg.metadata != null) {
-            transferAmount = apiMsg.metadata["amount"]?.toDoubleOrNull()
-            transferCurrency = apiMsg.metadata["currency"]
-            transferRef = apiMsg.metadata["reference"]
+            transferAmount = apiMsg.metadata["amount"]?.toString()?.toDoubleOrNull()
+            transferCurrency = apiMsg.metadata["currency"]?.toString()
+            transferRef = apiMsg.metadata["reference"]?.toString()
         }
 
+        val alreadyStored = messageDao.hasMessage(apiMsg.id)
         val convEntity = conversationDao.getConversationSync(conversationId)
         val entity = MessageEntity(
             id = apiMsg.id,
@@ -1438,8 +1443,9 @@ class OnChatRepository(private val context: Context) {
             status = apiMsg.status ?: "delivered",
             isEdited = false,
             type = apiMsg.type,
-            fileUrl = apiMsg.fileUrl,
-            fileName = apiMsg.fileName,
+            metadataJson = apiMsg.metadata?.let { org.json.JSONObject(it).toString() },
+            fileUrl = apiMsg.resolvedFileUrl,
+            fileName = apiMsg.resolvedFileName,
             transferAmount = transferAmount,
             transferCurrency = transferCurrency,
             transferReference = transferRef
@@ -1449,11 +1455,11 @@ class OnChatRepository(private val context: Context) {
         // Update conversation last message in Room so active chat moves to the top
         val conv = conversationDao.getConversationSync(conversationId)
         if (conv != null) {
-            val newUnread = if (!isMine) { readConversationsSet.remove(conversationId); conv.unreadCount + 1 } else conv.unreadCount
+            val newUnread = if (!isMine && !alreadyStored) { readConversationsSet.remove(conversationId); conv.unreadCount + 1 } else conv.unreadCount
             conversationDao.insertConversation(
                 conv.copy(
-                    lastMessage = apiMsg.content,
-                    lastMessageTime = timestamp,
+                    lastMessage = if (timestamp >= conv.lastMessageTime) apiMsg.content else conv.lastMessage,
+                    lastMessageTime = maxOf(timestamp, conv.lastMessageTime),
                     unreadCount = newUnread
                 )
             )
@@ -1463,12 +1469,13 @@ class OnChatRepository(private val context: Context) {
                 ConversationEntity(
                     id = conversationId,
                     name = apiMsg.senderName ?: "Correspondant",
-                    avatarUrl = null,
+                    avatarUrl = apiMsg.senderAvatar,
                     lastMessage = apiMsg.content,
                     lastMessageTime = timestamp,
                     unreadCount = if (!isMine) 1 else 0
                 )
             )
+        }
         }
     }
 
@@ -1552,8 +1559,8 @@ class OnChatRepository(private val context: Context) {
                 id = returnedMsg.id,
                 status = returnedMsg.status ?: "sent",
                 metadataJson = returnedMsg.metadata?.let { org.json.JSONObject(it).toString() } ?: entity.metadataJson,
-                fileUrl = returnedMsg.fileUrl ?: returnedMsg.metadata?.get("fileUrl") ?: fileUrl,
-                fileName = returnedMsg.fileName ?: returnedMsg.metadata?.get("fileName") ?: fileName
+                fileUrl = returnedMsg.resolvedFileUrl ?: fileUrl,
+                fileName = returnedMsg.resolvedFileName ?: fileName
             ))
         } catch (e: Exception) {
             messageDao.insertMessage(entity.copy(status = "failed"))

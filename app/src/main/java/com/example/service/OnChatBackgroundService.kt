@@ -109,8 +109,15 @@ class OnChatBackgroundService : Service() {
 
         // 2. Incoming messages
         serviceScope.launch {
+            val repository = com.example.data.repository.OnChatRepository(applicationContext)
             wsManager.incomingMessages.collect { pair ->
+                // The ViewModel owns foreground ingestion; persist here while its UI is absent.
                 if (OnChatNotificationHelper.appInForeground) return@collect
+                try { repository.insertWebSocketMessage(pair.first, pair.second) }
+                catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    Log.w(TAG, "Unable to persist incoming message")
+                }
                 if (pair.second.senderId == OnChatNotificationHelper.signedInUserId) return@collect
                 RingtoneHelper.playNotificationSound(applicationContext)
                 OnChatNotificationHelper.showMessageNotification(

@@ -285,6 +285,11 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         wsManager.onReconnected = {
             fetchServerConversations()
             refreshWallet()
+            viewModelScope.launch {
+                _activeConversationId.value?.takeIf { it.isNotBlank() }?.let {
+                    repository.fetchConversationDetails(it)
+                }
+            }
         }
 
         // Active background sync loop to guarantee 100% zero missed messages or statuses (only when authenticated)

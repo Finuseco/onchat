@@ -26,9 +26,7 @@ class OnChatWebSocketManager private constructor() {
 
     companion object {
         private const val TAG = "OnChatWebSocket"
-        const val WS_URL_GLOB_PRIMARY = "wss://glob.cashpay-all.com/ws"
-        const val WS_URL_GLOB_REALTIME = "wss://glob.cashpay-all.com/ws/realtime"
-        const val WS_URL_GLOB_ROOT = "wss://glob.cashpay-all.com"
+
 
         @Volatile
         private var instance: OnChatWebSocketManager? = null
@@ -114,7 +112,7 @@ class OnChatWebSocketManager private constructor() {
     var onReconnected: (() -> Unit)? = null
 
     /**
-     * Connect to the central CashPay Realtime Engine (glob.cashpay-all.com)
+     * Connect to the shared CashPay WebSocket (same endpoint as Wallet-final)
      */
     fun connect() {
         if (_connectionStatus.value == WsConnectionStatus.CONNECTED || isConnecting.get()) {
@@ -144,15 +142,12 @@ class OnChatWebSocketManager private constructor() {
                 if (webSocket !== ws) return
                 Log.d(TAG, "WebSocket connected")
                 isConnecting.set(false)
-                val wasReconnecting = reconnectAttempt > 0
                 reconnectAttempt = 0
                 _connectionStatus.value = WsConnectionStatus.CONNECTED
                 
                 watchedMeetings.keys.forEach { subscribeMeeting(it) }
                 startHeartbeat()
-                if (wasReconnecting) {
-                    onReconnected?.invoke()
-                }
+                onReconnected?.invoke()
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -280,28 +275,10 @@ class OnChatWebSocketManager private constructor() {
                     var msg = envelope?.message ?: dataMap?.get("message")?.let { value ->
                         try { moshi.adapter(ApiMessage::class.java).fromJsonValue(value) } catch (_: Exception) { null }
                     }
-                    if (msg == null) {
-                        val d = dataMap ?: rawJsonObj?.optJSONObject("data")?.let { jo ->
-                            val map = mutableMapOf<String, Any?>()
-                            jo.keys().forEach { k -> map[k] = jo.opt(k) }
-                            map
-                        }
-                        val content = d?.get("content")?.toString() ?: rawJsonObj?.optString("content") ?: ""
-                        if (content.isNotEmpty()) {
-                            val sId = d?.get("senderId")?.toString()?.toLongOrNull() ?: envelope?.resolvedUserId
-                            val sName = d?.get("senderName")?.toString() ?: envelope?.userName ?: "Contact"
-                            msg = ApiMessage(
-                                id = d?.get("id")?.toString() ?: "msg_${System.currentTimeMillis()}",
-                                conversationId = convId ?: "conv_1",
-                                senderId = sId,
-                                senderName = sName,
-                                content = content,
-                                timestamp = envelope?.timestamp ?: System.currentTimeMillis().toString(),
-                                createdAt = envelope?.timestamp ?: System.currentTimeMillis().toString(),
-                                status = "delivered",
-                                type = d?.get("type")?.toString() ?: "text"
-                            )
-                        }
+                    if (msg == null || convId.isNullOrBlank()) {
+                        // Never fabricate message/conversation IDs. Recover the authoritative history.
+                        onReconnected?.invoke()
+                        return
                     }
                     if (convId != null && msg != null) {
                         coroutineScope.launch {
