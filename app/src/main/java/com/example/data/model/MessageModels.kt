@@ -35,9 +35,15 @@ data class Message(
         else {
             try {
                 val moshi = com.squareup.moshi.Moshi.Builder().build()
-                val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
-                val adapter = moshi.adapter<Map<String, String>>(type)
-                adapter.fromJson(metadataJson)
+                val type = com.squareup.moshi.Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
+                val adapter = moshi.adapter<Map<String, Any?>>(type)
+                val jsonValue = moshi.adapter(Any::class.java)
+                adapter.fromJson(metadataJson)?.filterValues { it != null }?.mapValues { (_, value) ->
+                    when (value) {
+                        is Map<*, *>, is List<*> -> jsonValue.toJson(value)
+                        else -> value.toString()
+                    }
+                }
             } catch (_: Exception) {
                 null
             }

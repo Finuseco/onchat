@@ -471,7 +471,7 @@ data class WsEventEnvelope(
     @Json(name = "timestamp") val timestamp: String? = null
 ) {
     val resolvedEvent: String
-        get() = (event ?: type ?: "").lowercase()
+        get() = (event ?: type ?: "").lowercase().replace("call:", "call.").let { if (it == "call.hangup") "call.ended" else it }
 
     val resolvedConversationId: String?
         get() = conversationId ?: conversation_id ?: (data?.get("conversationId")?.toString()) ?: (data?.get("conversation_id")?.toString())
@@ -483,7 +483,7 @@ data class WsEventEnvelope(
         get() = walletId ?: wallet_id ?: (data?.get("walletId")?.toString())
 
     val resolvedCallId: String?
-        get() = callId ?: call_id ?: (data?.get("callId")?.toString())
+        get() = callId ?: call_id ?: (data?.get("callId")?.toString()) ?: (data?.get("call_id")?.toString())
 }
 
 @JsonClass(generateAdapter = true)

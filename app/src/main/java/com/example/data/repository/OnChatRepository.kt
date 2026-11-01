@@ -1015,8 +1015,9 @@ class OnChatRepository(private val context: Context) {
     suspend fun fetchConversations(): Result<List<Conversation>> = withContext(Dispatchers.IO) {
         // Sync with verified route: GET /api/v1/chat/conversations
         try {
+            val session = sessionDao.getSession() ?: error("Authentification requise")
             val response = ApiClient.apiService.getConversations()
-            if (response.isSuccessful && response.body() != null) {
+            if (response.isSuccessful && response.body()?.success == true) {
                 val apiList = response.body()?.conversations ?: emptyList()
                 val entities = apiList.map { apiConv ->
                     val contact = apiConv.contact
@@ -1026,9 +1027,10 @@ class OnChatRepository(private val context: Context) {
                         avatarUrl = contact?.displayAvatar,
                         lastMessage = apiConv.lastMessage?.content ?: "",
                         lastMessageTime = try {
-                            apiConv.lastMessageTimestamp?.toLong() ?: System.currentTimeMillis()
+                            val raw = apiConv.lastMessageTimestamp ?: apiConv.lastMessage?.timestamp ?: apiConv.createdAt
+                            raw?.toLongOrNull() ?: raw?.let { java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSX", java.util.Locale.US).parse(it)?.time } ?: 0L
                         } catch (_: Exception) {
-                            System.currentTimeMillis()
+                            0L
                         },
                         unreadCount = if (readConversationsSet.contains(apiConv.id)) 0 else apiConv.unreadCount,
                         isGroup = apiConv.isGroup ?: false,
@@ -1048,15 +1050,29 @@ class OnChatRepository(private val context: Context) {
                         isMuted = false
                     )
                 }
-                conversationDao.clearAllConversations()
-                if (entities.isNotEmpty()) {
-                    conversationDao.insertConversations(entities)
+                db.withTransaction {
+                    if (sessionDao.getSession()?.token != session.token) error("La session a changé")
+                    val merged = entities.map { fresh ->
+                        val old = conversationDao.getConversationSync(fresh.id)
+                        if (old == null) fresh else old.copy(
+                            name = fresh.name, avatarUrl = fresh.avatarUrl ?: old.avatarUrl,
+                            lastMessage = if (old.lastMessageTime > fresh.lastMessageTime) old.lastMessage else fresh.lastMessage,
+                            lastMessageTime = maxOf(old.lastMessageTime, fresh.lastMessageTime),
+                            unreadCount = if (old.lastMessageTime > fresh.lastMessageTime) old.unreadCount else fresh.unreadCount,
+                            isGroup = fresh.isGroup, currency = fresh.currency,
+                            contactWalletId = fresh.contactWalletId ?: old.contactWalletId,
+                            contactPhone = fresh.contactPhone ?: old.contactPhone
+                        )
+                    }
+                    conversationDao.insertConversations(merged)
                 }
-            }
-        } catch (_: Exception) {}
-
-        val local = conversationDao.getConversationsFlow().firstOrNull() ?: emptyList()
-        Result.success(local.map { it.toDomain() })
+            } else error("Synchronisation des conversations refusée (${response.code()})")
+            val local = conversationDao.getConversationsFlow().firstOrNull() ?: emptyList()
+            Result.success(local.map { it.toDomain() })
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            Result.failure(error)
+        }
     }
 
     suspend fun fetchConversationDetails(conversationId: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -1079,10 +1095,10 @@ class OnChatRepository(private val context: Context) {
         // Synchronize full messages and contact with confirmed route: GET /api/v1/chat/conversations/{conversationId}
         try {
             val response = ApiClient.apiService.getConversationDetails(conversationId)
-            if (response.isSuccessful && response.body() != null) {
+            val session = sessionDao.getSession() ?: error("Authentification requise")
+            if (response.isSuccessful && response.body()?.success == true) {
                 val body = response.body()!!
-                val session = sessionDao.getSession()
-                val currentUserId = session?.userId?.toString() ?: "1"
+                val currentUserId = session.userId.toString()
                 val contact = body.resolvedContact
                 val isGroup = body.isGroup ?: false
 
@@ -1132,7 +1148,7 @@ class OnChatRepository(private val context: Context) {
                 val convEntity = conversationDao.getConversationSync(conversationId)
                 val contactAvatar = convEntity?.avatarUrl
                 val msgEntities = body.resolvedMessages.map { apiMsg ->
-                    val isMine = apiMsg.senderId == session?.userId || (apiMsg.senderId == null && session != null)
+                    val isMine = apiMsg.senderId == session.userId
                     val parsedId = apiMsg.id.toString()
                     val timestamp = try {
                         val raw = apiMsg.timestamp ?: apiMsg.createdAt
@@ -1352,7 +1368,10 @@ class OnChatRepository(private val context: Context) {
     suspend fun getOrCreateConversationForGroup(groupId: Long, groupName: String): String = withContext(Dispatchers.IO) {
         val groupConvId = "g_$groupId"
         val existing = conversationDao.getConversationsFlow().firstOrNull()?.find { it.id == groupConvId }
-        if (existing != null) return@withContext existing.id
+        if (existing != null) {
+            conversationDao.insertConversation(existing.copy(name = groupName, isGroup = true))
+            return@withContext existing.id
+        }
 
         val group = groupDao.getGroupsFlow().firstOrNull()?.find { it.id == groupId }
 
@@ -1460,7 +1479,8 @@ class OnChatRepository(private val context: Context) {
                 conv.copy(
                     lastMessage = if (timestamp >= conv.lastMessageTime) apiMsg.content else conv.lastMessage,
                     lastMessageTime = maxOf(timestamp, conv.lastMessageTime),
-                    unreadCount = newUnread
+                    unreadCount = newUnread,
+                    isGroup = conv.isGroup || conversationId.startsWith("g_")
                 )
             )
         } else {
@@ -1468,11 +1488,12 @@ class OnChatRepository(private val context: Context) {
             conversationDao.insertConversation(
                 ConversationEntity(
                     id = conversationId,
-                    name = apiMsg.senderName ?: "Correspondant",
+                    name = if (conversationId.startsWith("g_")) "Discussion de groupe" else apiMsg.senderName ?: "Correspondant",
                     avatarUrl = apiMsg.senderAvatar,
                     lastMessage = apiMsg.content,
                     lastMessageTime = timestamp,
-                    unreadCount = if (!isMine) 1 else 0
+                    unreadCount = if (!isMine) 1 else 0,
+                    isGroup = conversationId.startsWith("g_")
                 )
             )
         }

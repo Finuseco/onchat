@@ -38,6 +38,8 @@ class OnChatWebSocketManager private constructor() {
         }
     }
 
+    private val receivedEvents = RealtimeEventWindow()
+
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val moshi: Moshi = Moshi.Builder()
@@ -257,6 +259,7 @@ class OnChatWebSocketManager private constructor() {
             val effectiveEvent = if ((eventType == "notification" || eventType == "punch" || eventType == "push") && !innerEvent.isNullOrBlank()) innerEvent else eventType
 
             when (effectiveEvent) {
+                "realtime.resync" -> onReconnected?.invoke()
                 "meet.updated" -> {
                     val code = dataMap?.get("meetCode")?.toString()
                     if (code != null && watchedMeetings.containsKey(code)) {
@@ -281,6 +284,7 @@ class OnChatWebSocketManager private constructor() {
                         return
                     }
                     if (convId != null && msg != null) {
+                        if (!receivedEvents.claim("message:$convId:${msg.id}", System.currentTimeMillis())) return
                         coroutineScope.launch {
                             _incomingMessages.emit(Pair(convId, msg))
                         }
@@ -356,7 +360,10 @@ class OnChatWebSocketManager private constructor() {
                             ?: d?.get("call_id")?.toString()
                             ?: rawJsonObj?.optString("callId")
                             ?: rawJsonObj?.optString("call_id")
-                            ?: "call_${System.currentTimeMillis()}"
+                            ?: ""
+                        if (callId.isBlank() || !receivedEvents.claim("call:$callId", System.currentTimeMillis())) return
+                        val ringFor = (d?.get("ringForMs") as? Number)?.toLong()?.coerceIn(0L, 25000L) ?: 25000L
+                        if (ringFor <= 0L) return
 
                         val callerName = d?.get("callerName")?.toString()
                             ?: d?.get("caller_name")?.toString()
@@ -380,7 +387,7 @@ class OnChatWebSocketManager private constructor() {
                             callerWalletId = callerWallet,
                             callerAvatar = callAvatar,
                             isVideo = isVideo,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = System.currentTimeMillis() - (25000L - ringFor)
                         )
                         coroutineScope.launch {
                             _incomingCalls.emit(callState)
@@ -398,6 +405,7 @@ class OnChatWebSocketManager private constructor() {
                 // 6. WebRTC Call Signaling (answer, candidate, accepted, rejected, ended)
                 "call.answer", "call.ice_candidate", "call.accepted", "call.rejected", "call.ended", "conference.invite", "call:answer", "call:rejected", "call:ended", "call:hangup" -> {
                     if (envelope != null) {
+                        envelope.resolvedCallId?.let { receivedEvents.claim("call:$it", System.currentTimeMillis()) }
                         coroutineScope.launch {
                             _callSignalingEvents.emit(envelope)
                         }
@@ -485,6 +493,7 @@ class OnChatWebSocketManager private constructor() {
     }
 
     fun disconnect() {
+        receivedEvents.clear()
         shouldReconnect = false
         reconnectJob?.cancel()
         reconnectJob = null

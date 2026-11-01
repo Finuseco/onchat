@@ -286,13 +286,14 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             fetchServerConversations()
             refreshWallet()
             viewModelScope.launch {
+                repository.fetchGroups()
                 _activeConversationId.value?.takeIf { it.isNotBlank() }?.let {
                     repository.fetchConversationDetails(it)
                 }
             }
         }
 
-        // Active background sync loop to guarantee 100% zero missed messages or statuses (only when authenticated)
+        // Periodic API reconciliation while the ViewModel is active; WebSocket events update immediately.
         viewModelScope.launch {
             while (isActive) {
                 delay(10000) // Reduced frequency to 10s to prevent UI flicker
@@ -321,7 +322,12 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             wsManager.incomingMessages.collect { pair ->
-                repository.insertWebSocketMessage(pair.first, pair.second)
+                if (currentSession.value == null) return@collect
+                try { repository.insertWebSocketMessage(pair.first, pair.second) }
+                catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    fetchServerConversations()
+                }
                 OnChatNotificationHelper.signedInUserId = currentSession.value?.userId
                 if (pair.second.senderId == currentSession.value?.userId) return@collect
                 if (!OnChatNotificationHelper.appInForeground) return@collect
@@ -337,20 +343,27 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                         conversationId = pair.first,
                         senderName = pair.second.senderName ?: "Nouveau message",
                         senderWalletId = null,
-                        messageText = pair.second.content
+                        messageText = when (pair.second.type) {
+                            "audio" -> "Message vocal"
+                            "image" -> "Photo"
+                            "video" -> "Vidéo"
+                            "doc" -> "Document"
+                            else -> pair.second.content
+                        }
                     )
                 }
             }
         }
         viewModelScope.launch {
             wsManager.incomingCalls.collect { callState ->
-                if (_activeCall.value != null) {
+                if (_activeCall.value != null || (_incomingCall.value != null && _incomingCall.value?.callId != callState.callId)) {
                     currentSession.value?.let { session ->
                         try { ApiClient.apiService.respondCall(callState.callId, RespondCallRequest(session.walletId, "BUSY")) } catch (_: Exception) { }
                     }
                     return@collect
                 }
                 _incomingCall.value = callState
+                if (OnChatNotificationHelper.appInForeground) {
                 RingtoneHelper.playCallRingtone(getApplication())
                 OnChatNotificationHelper.showIncomingCallNotification(
                     context = getApplication(),
@@ -361,10 +374,12 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     isVideo = callState.isVideo
                 )
 
-                // 25-second ring timeout -> converts to missed call notification
+                }
+                // Share the original ring deadline, including a replay after reconnect.
                 viewModelScope.launch {
-                    delay(25000)
+                    delay((25000L - (System.currentTimeMillis() - callState.timestamp)).coerceIn(0L, 25000L))
                     if (_incomingCall.value?.callId == callState.callId) {
+                        if (!OnChatNotificationHelper.appInForeground) { _incomingCall.value = null; return@launch }
                         val missed = _incomingCall.value
                         currentSession.value?.let { session ->
                             try { ApiClient.apiService.respondCall(callState.callId, RespondCallRequest(session.walletId,"MISSED")) } catch (_: Exception) { }
@@ -395,7 +410,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             wsManager.callSignalingEvents.collect { envelope ->
-                when (envelope.event) {
+                when (envelope.resolvedEvent) {
                     "chat.message.read", "chat.read" -> {
                         val conversationId = envelope.resolvedConversationId
                         val readerId = envelope.resolvedUserId
@@ -403,7 +418,14 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                             repository.markOutgoingMessagesAsRead(conversationId)
                         }
                     }
-                    "call.accepted", "call.answer" -> { /* Media connectivity is reported by WebRTC, not by signalling. */ }
+                    "call.accepted" -> {
+                        if (_incomingCall.value?.callId == envelope.resolvedCallId) {
+                            _incomingCall.value = null
+                            RingtoneHelper.stopCallRingtone(getApplication())
+                            OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
+                        }
+                    }
+                    "call.answer" -> { /* Media connectivity is reported by WebRTC. */ }
                     "call.rejected", "call.ended" -> {
                         val id = envelope.resolvedCallId
                         if (_activeCall.value?.roomId == id) {
@@ -1123,8 +1145,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 _isSkeletonLoading.value = true
             }
             try {
-                repository.fetchConversations()
-            } catch (_: Exception) {}
+                repository.fetchConversations().onFailure { _errorMessage.value = it.message ?: "Synchronisation indisponible" }
+            } catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error }
             _isSkeletonLoading.value = false
         }
     }
@@ -1132,7 +1154,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun fetchConversationDetails(conversationId: String) {
         if (ApiClient.authToken.isNullOrBlank()) return
         viewModelScope.launch {
-            repository.fetchConversationDetails(conversationId)
+            repository.fetchConversationDetails(conversationId).onFailure { _errorMessage.value = it.message ?: "Messages indisponibles" }
         }
     }
 

@@ -51,6 +51,8 @@ class OnChatBackgroundService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var mediaActive = false
+    private var ringingCall: com.example.data.model.IncomingCallNotificationState? = null
+    private var ringDeadline: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -93,6 +95,21 @@ class OnChatBackgroundService : Service() {
         // 1. Incoming calls: Wake up phone and ring
         serviceScope.launch {
             wsManager.incomingCalls.collect { callState ->
+                if (mediaActive || (ringingCall != null && ringingCall?.callId != callState.callId)) return@collect
+                ringingCall = callState
+                ringDeadline?.cancel()
+                ringDeadline = serviceScope.launch {
+                    delay((25000L - (System.currentTimeMillis() - callState.timestamp)).coerceIn(0L, 25000L))
+                    if (ringingCall?.callId != callState.callId) return@launch
+                    ringingCall = null
+                    if (OnChatNotificationHelper.appInForeground) return@launch
+                    RingtoneHelper.stopCallRingtone(applicationContext)
+                    OnChatNotificationHelper.cancelIncomingCallNotification(applicationContext)
+                    OnChatNotificationHelper.showMissedCallNotification(applicationContext, callState.callerName, callState.callerWalletId.ifBlank { null }, callState.isVideo)
+                    val session = com.example.data.db.AppDatabase.getDatabase(applicationContext).sessionDao().getSession() ?: return@launch
+                    try { com.example.data.api.ApiClient.apiService.respondCall(callState.callId, com.example.data.model.RespondCallRequest(session.walletId, "MISSED")) }
+                    catch (error: Exception) { if (error is CancellationException) throw error }
+                }
                 if (OnChatNotificationHelper.appInForeground) return@collect
                 wakeUpPhoneScreen()
                 RingtoneHelper.playCallRingtone(applicationContext)
@@ -104,6 +121,17 @@ class OnChatBackgroundService : Service() {
                     callerAvatar = callState.callerAvatar,
                     isVideo = callState.isVideo
                 )
+            }
+        }
+
+        serviceScope.launch {
+            wsManager.callSignalingEvents.collect { event ->
+                if (event.resolvedEvent in setOf("call.accepted", "call.rejected", "call.ended") && event.resolvedCallId == ringingCall?.callId) {
+                    ringingCall = null
+                    ringDeadline?.cancel()
+                    RingtoneHelper.stopCallRingtone(applicationContext)
+                    OnChatNotificationHelper.cancelIncomingCallNotification(applicationContext)
+                }
             }
         }
 
@@ -215,6 +243,10 @@ class OnChatBackgroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
+        if (ringingCall != null) {
+            RingtoneHelper.stopCallRingtone(applicationContext)
+            OnChatNotificationHelper.cancelIncomingCallNotification(applicationContext)
+        }
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
