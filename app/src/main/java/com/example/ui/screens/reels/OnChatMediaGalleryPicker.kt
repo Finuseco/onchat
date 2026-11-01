@@ -1,412 +1,103 @@
 package com.example.ui.screens.reels
 
+import android.Manifest
 import android.content.ContentUris
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.MediaStore
-import androidx.compose.animation.*
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import coil.ImageLoader
 import coil.compose.AsyncImage
+import coil.decode.VideoFrameDecoder
 import com.example.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-data class MediaGalleryItem(
-    val id: Long,
-    val uri: Uri,
-    val isVideo: Boolean,
-    val durationSeconds: Int = 0,
-    val bucketName: String = "Appareil",
-    val dateAdded: Long = 0L
-)
+private data class GalleryMedia(val uri:Uri,val kind:String,val name:String,val added:Long,val folder:String)
 
+/** Recent local media, with explicit type filters; system picker remains available on denied access. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnChatMediaGalleryPicker(
-    onDismiss: () -> Unit,
-    onMediaSelected: (String, String) -> Unit // (uriString, "video" | "image")
-) {
-    val context = LocalContext.current
-    var selectedFilter by remember { mutableStateOf("Tous") } // "Tous", "Vidéos", "Photos", "Dossiers"
-    var selectedBucket by remember { mutableStateOf<String?>(null) }
-    var mediaItems by remember { mutableStateOf<List<MediaGalleryItem>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
-
-    // Load real media files from device MediaStore
-    LaunchedEffect(Unit) {
-        isLoading = true
-        withContext(Dispatchers.IO) {
-            val list = mutableListOf<MediaGalleryItem>()
-
-            // 1. Query Videos
-            try {
-                val videoProjection = arrayOf(
-                    MediaStore.Video.Media._ID,
-                    MediaStore.Video.Media.DURATION,
-                    MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
-                    MediaStore.Video.Media.DATE_ADDED
-                )
-                context.contentResolver.query(
-                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                    videoProjection,
-                    null,
-                    null,
-                    "${MediaStore.Video.Media.DATE_ADDED} DESC"
-                )?.use { cursor ->
-                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                    val durCol = cursor.getColumnIndex(MediaStore.Video.Media.DURATION)
-                    val bucketCol = cursor.getColumnIndex(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
-                    val dateCol = cursor.getColumnIndex(MediaStore.Video.Media.DATE_ADDED)
-
-                    while (cursor.moveToNext() && list.size < 150) {
-                        val id = cursor.getLong(idCol)
-                        val durMs = if (durCol >= 0) cursor.getLong(durCol) else 0L
-                        val bucket = if (bucketCol >= 0) cursor.getString(bucketCol) ?: "Vidéos" else "Vidéos"
-                        val dateAdded = if (dateCol >= 0) cursor.getLong(dateCol) else 0L
-                        val contentUri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
-
-                        list.add(
-                            MediaGalleryItem(
-                                id = id,
-                                uri = contentUri,
-                                isVideo = true,
-                                durationSeconds = (durMs / 1000).toInt(),
-                                bucketName = bucket,
-                                dateAdded = dateAdded
-                            )
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("GalleryPicker", "Error querying videos: ${e.message}")
-            }
-
-            // 2. Query Images
-            try {
-                val imageProjection = arrayOf(
-                    MediaStore.Images.Media._ID,
-                    MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
-                    MediaStore.Images.Media.DATE_ADDED
-                )
-                context.contentResolver.query(
-                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                    imageProjection,
-                    null,
-                    null,
-                    "${MediaStore.Images.Media.DATE_ADDED} DESC"
-                )?.use { cursor ->
-                    val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-                    val bucketCol = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-                    val dateCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_ADDED)
-
-                    while (cursor.moveToNext() && list.size < 300) {
-                        val id = cursor.getLong(idCol)
-                        val bucket = if (bucketCol >= 0) cursor.getString(bucketCol) ?: "Photos" else "Photos"
-                        val dateAdded = if (dateCol >= 0) cursor.getLong(dateCol) else 0L
-                        val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-
-                        list.add(
-                            MediaGalleryItem(
-                                id = id,
-                                uri = contentUri,
-                                isVideo = false,
-                                durationSeconds = 0,
-                                bucketName = bucket,
-                                dateAdded = dateAdded
-                            )
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("GalleryPicker", "Error querying images: ${e.message}")
-            }
-
-            // Sort all by dateAdded descending
-            list.sortByDescending { it.dateAdded }
-            mediaItems = list
-        }
-        isLoading = false
+fun OnChatMediaGalleryPicker(onDismiss:()->Unit,onMediaSelected:(String,String)->Unit,audioOnly:Boolean=false,initialFilter:String="Tous"){
+ val context=LocalContext.current
+ var filter by remember {mutableStateOf(if(audioOnly)"Audios" else initialFilter)}
+ var bucket by remember {mutableStateOf<String?>(null)}
+ var folderMenu by remember {mutableStateOf(false)}
+ var revision by remember {mutableIntStateOf(0)}
+ var items by remember {mutableStateOf<List<GalleryMedia>>(emptyList())}
+ var loading by remember {mutableStateOf(true)}
+ val loader=remember {ImageLoader.Builder(context.applicationContext).components {add(VideoFrameDecoder.Factory())}.build()}
+ DisposableEffect(loader){onDispose{loader.shutdown()}}
+ val access=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){revision++}
+ val visual=rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()){uri->if(uri!=null){val kind=if(context.contentResolver.getType(uri)?.startsWith("video/")==true)"video" else "image";onMediaSelected(uri.toString(),kind)}}
+ val audio=rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()){uri->if(uri!=null)onMediaSelected(uri.toString(),"audio")}
+ fun browse(){if(audioOnly)audio.launch(arrayOf("audio/*")) else visual.launch(PickVisualMediaRequest(when(filter){"Photos"->ActivityResultContracts.PickVisualMedia.ImageOnly;"Vidéos"->ActivityResultContracts.PickVisualMedia.VideoOnly;else->ActivityResultContracts.PickVisualMedia.ImageAndVideo}))}
+ fun permissions():Array<String> = if(Build.VERSION.SDK_INT>=33){if(audioOnly)arrayOf(Manifest.permission.READ_MEDIA_AUDIO) else if(Build.VERSION.SDK_INT>=34)arrayOf(Manifest.permission.READ_MEDIA_IMAGES,Manifest.permission.READ_MEDIA_VIDEO,Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) else arrayOf(Manifest.permission.READ_MEDIA_IMAGES,Manifest.permission.READ_MEDIA_VIDEO)} else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+ LaunchedEffect(revision){
+  loading=true
+  val result=withContext(Dispatchers.IO){
+   val found=mutableListOf<GalleryMedia>()
+   fun query(collection:Uri,kind:String,permission:String){
+    val limitedVisual = kind != "audio" && Build.VERSION.SDK_INT >= 34 && ContextCompat.checkSelfPermission(context,Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)==PackageManager.PERMISSION_GRANTED
+    if(ContextCompat.checkSelfPermission(context,permission)!=PackageManager.PERMISSION_GRANTED && !limitedVisual)return
+    val folderColumn=if(kind=="audio")MediaStore.Audio.Media.ALBUM else MediaStore.Images.Media.BUCKET_DISPLAY_NAME
+    val projection=arrayOf(MediaStore.MediaColumns._ID,MediaStore.MediaColumns.DISPLAY_NAME,MediaStore.MediaColumns.DATE_ADDED,folderColumn)
+    try{context.contentResolver.query(collection,projection,null,null,"${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use{cursor->
+     val id=cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID);val name=cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME);val date=cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+     while(cursor.moveToNext()&&found.count{it.kind==kind}<300)found+=GalleryMedia(ContentUris.withAppendedId(collection,cursor.getLong(id)),kind,cursor.getString(name)?:"Média",cursor.getLong(date),cursor.getString(cursor.getColumnIndexOrThrow(folderColumn))?:"Appareil")
+    }}catch(_:SecurityException){/* Access may be revoked while the picker is open. */}
+   }
+   val old=Manifest.permission.READ_EXTERNAL_STORAGE
+   if(audioOnly)query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,"audio",if(Build.VERSION.SDK_INT>=33)Manifest.permission.READ_MEDIA_AUDIO else old)
+   else {query(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,"video",if(Build.VERSION.SDK_INT>=33)Manifest.permission.READ_MEDIA_VIDEO else old);query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,"image",if(Build.VERSION.SDK_INT>=33)Manifest.permission.READ_MEDIA_IMAGES else old)}
+   found.sortedByDescending{it.added}
+  }
+  items=result;loading=false
+ }
+ val filtered=items.filter{bucket==null||it.folder==bucket}.filter{filter=="Tous"||(filter=="Vidéos"&&it.kind=="video")||(filter=="Photos"&&it.kind=="image")||(filter=="Audios"&&it.kind=="audio")}
+ Scaffold(containerColor=CashPayNavyDark,topBar={TopAppBar(title={Text(if(audioOnly)"Choisir un son" else "Médias récents",color=Color.White)},navigationIcon={IconButton(onClick=onDismiss){Icon(Icons.Default.Close,"Fermer",tint=Color.White)}},actions={IconButton(onClick=::browse){Icon(Icons.Default.FolderOpen,"Sélecteur de l’appareil",tint=OnChatCyan)}},colors=TopAppBarDefaults.topAppBarColors(containerColor=CashPayNavySurface))}){padding->
+  Column(Modifier.fillMaxSize().padding(padding)){
+   if(!audioOnly)Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){listOf("Tous","Vidéos","Photos").forEach{kind->FilterChip(selected=filter==kind,onClick={filter=kind},label={Text(kind)})}}
+   Row(Modifier.fillMaxWidth().padding(horizontal=8.dp),horizontalArrangement=Arrangement.SpaceBetween){TextButton(onClick={access.launch(permissions())}){Text("Autoriser les médias récents")};TextButton(onClick=::browse){Text("Parcourir")}}
+   Box(Modifier.padding(horizontal=12.dp)){
+    TextButton(onClick={folderMenu=true}){Icon(Icons.Default.Folder,null);Text(bucket?:"Tous les dossiers")}
+    DropdownMenu(expanded=folderMenu,onDismissRequest={folderMenu=false}){
+     DropdownMenuItem(text={Text("Tous les dossiers")},onClick={bucket=null;folderMenu=false})
+     items.map{it.folder}.distinct().sorted().forEach{folder->DropdownMenuItem(text={Text(folder)},onClick={bucket=folder;folderMenu=false})}
     }
-
-    val photoPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        contract = androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            val mimeType = context.contentResolver.getType(uri) ?: ""
-            val type = if (mimeType.contains("video")) "video" else "image"
-            onMediaSelected(uri.toString(), type)
-        }
-    }
-
-    // Extracted Unique Folders (Buckets)
-    val availableBuckets = remember(mediaItems) {
-        mediaItems.map { it.bucketName }.distinct().sorted()
-    }
-
-    // Filtered list based on active tab and bucket
-    val filteredItems = remember(mediaItems, selectedFilter, selectedBucket) {
-        mediaItems.filter { item ->
-            val matchesType = when (selectedFilter) {
-                "Vidéos" -> item.isVideo
-                "Photos" -> !item.isVideo
-                else -> true
-            }
-            val matchesBucket = if (selectedBucket != null) item.bucketName == selectedBucket else true
-            matchesType && matchesBucket
-        }
-    }
-
-    Scaffold(
-        containerColor = CashPayNavyDark,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(
-                            text = "Gestionnaire de médias OnChat",
-                            color = Color.White,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = "${filteredItems.size} éléments trouvés",
-                            color = CashPayGrey,
-                            fontSize = 11.sp
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Fermer", tint = Color.White)
-                    }
-                },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            photoPickerLauncher.launch(
-                                androidx.activity.result.PickVisualMediaRequest(
-                                    androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                                )
-                            )
-                        }
-                    ) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = "Parcourir", tint = OnChatCyan)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = CashPayNavySurface)
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Main Filter Tabs ("Tous", "Vidéos", "Photos", "Dossiers")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(CashPayNavySurface)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                listOf("Tous", "Vidéos", "Photos", "Dossiers").forEach { tab ->
-                    val isSelected = selectedFilter == tab
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (isSelected) OnChatVioletDeep else Color.White.copy(alpha = 0.05f))
-                            .clickable {
-                                selectedFilter = tab
-                                if (tab != "Dossiers" && selectedBucket != null) {
-                                    selectedBucket = null
-                                }
-                            }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = tab,
-                            color = if (isSelected) Color.White else CashPayGrey,
-                            fontSize = 12.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-
-            // Folders (Buckets) horizontal chip bar if "Dossiers" or if multiple buckets exist
-            if (selectedFilter == "Dossiers" || availableBuckets.size > 1) {
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    item {
-                        FilterChip(
-                            selected = selectedBucket == null,
-                            onClick = { selectedBucket = null },
-                            label = { Text("Tous les dossiers") },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = OnChatCyan,
-                                selectedLabelColor = Color.Black
-                            )
-                        )
-                    }
-                    items(availableBuckets) { bucket ->
-                        FilterChip(
-                            selected = selectedBucket == bucket,
-                            onClick = { selectedBucket = if (selectedBucket == bucket) null else bucket },
-                            label = { Text(bucket) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = OnChatCyan,
-                                selectedLabelColor = Color.Black
-                            )
-                        )
-                    }
-                }
-            }
-
-            // Media Grid View
-            if (isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = OnChatCyan)
-                }
-            } else if (filteredItems.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.PermMedia,
-                            contentDescription = null,
-                            tint = CashPayGrey,
-                            modifier = Modifier.size(56.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Aucun fichier multimédia trouvé",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "Autorisez l'accès aux photos et vidéos ou parcourez directement vos dossiers.",
-                            color = CashPayGrey,
-                            fontSize = 12.sp,
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Button(
-                            onClick = {
-                                photoPickerLauncher.launch(
-                                    androidx.activity.result.PickVisualMediaRequest(
-                                        androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageAndVideo
-                                    )
-                                )
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = OnChatViolet),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = Color.White)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Parcourir les fichiers de l'appareil", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    items(filteredItems, key = { it.id }) { item ->
-                        Box(
-                            modifier = Modifier
-                                .aspectRatio(1f)
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(Color(0xFF27272A))
-                                .clickable {
-                                    val type = if (item.isVideo) "video" else "image"
-                                    onMediaSelected(item.uri.toString(), type)
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            AsyncImage(
-                                model = item.uri,
-                                contentDescription = null,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-
-                            // Overlay badge for video with duration
-                            if (item.isVideo) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomEnd)
-                                        .padding(4.dp)
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(Color.Black.copy(alpha = 0.7f))
-                                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(
-                                            imageVector = Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = Color.White,
-                                            modifier = Modifier.size(10.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(2.dp))
-                                        val min = item.durationSeconds / 60
-                                        val sec = item.durationSeconds % 60
-                                        Text(
-                                            text = String.format("%02d:%02d", min, sec),
-                                            color = Color.White,
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+   }
+   if(loading)Box(Modifier.fillMaxSize(),contentAlignment=Alignment.Center){CircularProgressIndicator()}
+   else if(filtered.isEmpty())Column(Modifier.fillMaxSize().padding(24.dp),verticalArrangement=Arrangement.Center,horizontalAlignment=Alignment.CenterHorizontally){Text("Aucun média accessible. Autorisez l’accès ou utilisez le sélecteur de l’appareil.",color=Color.White);Button(onClick=::browse){Text("Choisir un fichier")}}
+   else if(audioOnly)LazyColumn{items(filtered,key={it.uri.toString()}){item->ListItem(headlineContent={Text(item.name,maxLines=2,overflow=TextOverflow.Ellipsis)},leadingContent={Icon(Icons.Default.MusicNote,null)},modifier=Modifier.clickable{onMediaSelected(item.uri.toString(),"audio")})}}
+   else LazyVerticalGrid(columns=GridCells.Fixed(3),contentPadding=PaddingValues(2.dp),horizontalArrangement=Arrangement.spacedBy(2.dp),verticalArrangement=Arrangement.spacedBy(2.dp)){
+    items(filtered,key={it.uri.toString()}){item->Box(Modifier.aspectRatio(1f).background(CashPayNavySurface).clickable{onMediaSelected(item.uri.toString(),item.kind)}){
+     AsyncImage(model=item.uri,imageLoader=loader,contentDescription=item.name,contentScale=ContentScale.Crop,modifier=Modifier.fillMaxSize())
+     if(item.kind=="video")Icon(Icons.Default.PlayCircle,"Vidéo",tint=Color.White,modifier=Modifier.align(Alignment.BottomEnd).padding(6.dp).size(24.dp))
+    }}
+   }
+  }
+ }
 }

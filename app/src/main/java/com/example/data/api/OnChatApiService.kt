@@ -7,6 +7,9 @@ import retrofit2.Response
 import retrofit2.http.*
 
 interface OnChatApiService {
+    @GET("api/v1/onchat/notifications")
+    suspend fun recoverOnChatNotifications(@Query("cursor") cursor: String? = null): Response<RealtimeRecoveryResponse>
+
 
     // 0. Countries List (Active countries with code, name, dialCode)
     @GET("api/v1/countries")

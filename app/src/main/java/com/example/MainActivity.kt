@@ -51,7 +51,11 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: OnChatViewModel by viewModels()
 
-    override fun onStart() { super.onStart(); com.example.util.OnChatNotificationHelper.appInForeground = true }
+    override fun onStart() {
+        super.onStart()
+        com.example.util.OnChatNotificationHelper.appInForeground = true
+        if (viewModel.loginStep.value == LoginStep.AUTHENTICATED) runCatching { com.example.service.OnChatBackgroundService.start(this) }
+    }
     override fun onStop() { com.example.util.OnChatNotificationHelper.appInForeground = false; super.onStop() }
 
     override fun onCreate(savedInstanceState: Bundle?) {

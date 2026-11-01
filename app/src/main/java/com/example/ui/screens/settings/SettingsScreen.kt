@@ -36,6 +36,16 @@ fun SettingsScreen(
     onOpenProfile: (() -> Unit)? = null,
     onOpenTransactions: (() -> Unit)? = null
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    var notificationsEnabled by remember { mutableStateOf(androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()) }
+    DisposableEffect(lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) notificationsEnabled = androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     val session by viewModel.currentSession.collectAsState()
     val forgotPinStep by viewModel.forgotPinStep.collectAsState()
     var biometricEnabled by remember { mutableStateOf(session?.biometricEnabled ?: false) }
@@ -61,6 +71,17 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
+            Card(colors = CardDefaults.cardColors(containerColor = CashPayNavySurface), modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(if (notificationsEnabled) "Notifications autorisées" else "Notifications désactivées", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("Messages, photos, audios et appels : vérifiez aussi les catégories de notifications OnChat dans Android.", color = CashPayGrey, fontSize = 12.sp)
+                    TextButton(onClick = {
+                        val settings = if (android.os.Build.VERSION.SDK_INT >= 26) android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+                        else android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:${context.packageName}"))
+                        context.startActivity(settings)
+                    }) { Text("Configurer les notifications", color = OnChatCyan) }
+                }
+            }
             // Profile Card (Clickable to view full Telegram-style profile)
             Card(
                 shape = RoundedCornerShape(18.dp),

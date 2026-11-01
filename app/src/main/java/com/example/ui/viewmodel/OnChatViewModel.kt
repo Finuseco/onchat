@@ -626,8 +626,11 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onOtpChange(otp: String) {
+        if (_loginStep.value != LoginStep.OTP_VERIFY || _authLoading.value || otp.any { it !in '0'..'9' } || otp.length > 6) return
+        val changed = _otpInput.value != otp
         _otpInput.value = otp
         _authError.value = null
+        if (changed && otp.length == 6) submitOtp()
     }
 
     fun onPinChange(pin: String) {
@@ -889,15 +892,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun submitOtp() {
         val otp = _otpInput.value.trim()
-        if (otp.length < 4) {
+        if (_authLoading.value || _loginStep.value != LoginStep.OTP_VERIFY) return
+        if (otp.length != 6 || otp.any { it !in '0'..'9' }) {
             _authError.value = UiAuthError(
                 title = "Code requis",
                 message = "Veuillez entrer le code de vérification reçu."
             )
             return
         }
+        _authLoading.value = true
         viewModelScope.launch {
-            _authLoading.value = true
             _authError.value = null
             val result = repository.verifyOtp(_pendingUserId.value, otp, _walletIdInput.value)
             _authLoading.value = false
@@ -907,6 +911,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 _pinInput.value = ""
                 _successMessage.value = "Code de vérification validé !"
             }.onFailure { err ->
+                _otpInput.value = ""
                 if (err is com.example.data.repository.AuthException) {
                     _authError.value = UiAuthError(err.title, err.detail)
                 } else {

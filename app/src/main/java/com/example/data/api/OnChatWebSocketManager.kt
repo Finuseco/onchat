@@ -115,9 +115,31 @@ class OnChatWebSocketManager private constructor() {
     private val typingJobs = mutableMapOf<String, Job>()
 
     var onReconnected: (() -> Unit)? = null
+    private var recoveryJob: Job? = null
+    private var recoveryCursor: String? = null
+    private fun startRecovery() {
+        if (recoveryJob?.isActive == true) return
+        val ownerToken = ApiClient.authToken ?: SessionTokenStore.getToken() ?: return
+        recoveryJob = coroutineScope.launch {
+            while (isActive && shouldReconnect) {
+                var more = false
+                try {
+                    val response = ApiClient.apiService.recoverOnChatNotifications(recoveryCursor)
+                    if ((ApiClient.authToken ?: SessionTokenStore.getToken()) != ownerToken) break
+                    val body = response.body()
+                    if (response.isSuccessful && body?.success == true) {
+                        for (event in body.events) handleIncomingMessage(envelopeAdapter.toJson(event))
+                        recoveryCursor = body.cursor
+                        more = body.hasMore
+                    }
+                } catch (error: Exception) { if (error is CancellationException) throw error }
+                delay(if (more) 250 else 15000)
+            }
+        }
+    }
 
     /**
-     * Connect to the shared CashPay WebSocket (same endpoint as Wallet-final)
+     * Connect to the shared CashPay WebSocket (same endpoint as Wallet Best)
      */
     fun connect() {
         if (_connectionStatus.value == WsConnectionStatus.CONNECTED || isConnecting.get()) {
@@ -131,6 +153,7 @@ class OnChatWebSocketManager private constructor() {
         if (!isConnecting.compareAndSet(false, true)) return
         _connectionStatus.value = WsConnectionStatus.CONNECTING
         shouldReconnect = true
+        startRecovery()
         val targetUrl = com.example.BuildConfig.ONCHAT_WS_URL
 
         val requestBuilder = Request.Builder()
@@ -509,6 +532,9 @@ class OnChatWebSocketManager private constructor() {
     fun disconnect() {
         receivedEvents.clear()
         shouldReconnect = false
+        recoveryJob?.cancel()
+        recoveryJob = null
+        recoveryCursor = null
         reconnectJob?.cancel()
         reconnectJob = null
         isConnecting.set(false)

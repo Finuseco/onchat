@@ -14,8 +14,8 @@ android {
         applicationId = "com.aistudio.onchat.vqpz"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "5.5"
+        versionCode = 11
+        versionName = "5.6"
         val wsUrl = providers.gradleProperty("onchatWsUrl").orElse("wss://app.cashpay-all.com/ws").get()
         require(wsUrl.startsWith("wss://") && !wsUrl.contains('"')) { "onchatWsUrl must be a secure public WebSocket URL" }
         buildConfigField("String", "ONCHAT_WS_URL", "\"$wsUrl\"")
@@ -90,8 +90,11 @@ dependencies {
     implementation(libs.moshi.kotlin)
     ksp(libs.moshi.kotlin.codegen)
 
+    implementation("com.google.android.gms:play-services-auth-api-phone:18.2.0")
+
     // Coil
     implementation(libs.coil.compose)
+    implementation("io.coil-kt:coil-video:2.7.0")
 
     // Media3
     implementation(libs.androidx.media3.exoplayer)

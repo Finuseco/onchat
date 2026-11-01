@@ -18,16 +18,19 @@ import com.example.ui.viewmodel.OnChatViewModel
 fun VideoPublishScreen(viewModel: OnChatViewModel, onBack: () -> Unit, onSuccess: () -> Unit) {
     val context = LocalContext.current
     var selected by remember { mutableStateOf<Uri?>(null) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { selected = it }
+    var showGallery by remember { mutableStateOf(false) }
+    var galleryFilter by remember { mutableStateOf("Tous") }
     val uri = selected
-    if (uri != null) {
+    if (showGallery) {
+        OnChatMediaGalleryPicker(onDismiss = { showGallery = false }, initialFilter = galleryFilter, onMediaSelected = { value, _ -> selected = Uri.parse(value); showGallery = false })
+    } else if (uri != null) {
         val type = context.contentResolver.getType(uri).orEmpty()
         VideoEditorScreen(mediaUri = uri.toString(), mediaType = if (type.startsWith("image/")) "photo" else "video", viewModel = viewModel, onBack = { selected = null }, onPublish = { _, _ -> viewModel.fetchVideosFeed(); onSuccess() })
     } else Column(Modifier.fillMaxSize().background(CashPayNavyDark).statusBarsPadding().padding(24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         TextButton(onClick = onBack) { Text("Retour") }
         Text("Créer une vidéo OnChat", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
         Text("Montez vos images et vidéos, ajoutez une musique et du texte. Durée maximale : 10 minutes.", color = MaterialTheme.colorScheme.onBackground)
-        Button(onClick = { picker.launch("video/*") }) { Text("Choisir une vidéo") }
-        OutlinedButton(onClick = { picker.launch("image/*") }) { Text("Composer à partir de photos") }
+        Button(onClick = { galleryFilter = "Vidéos"; showGallery = true }) { Text("Choisir une vidéo") }
+        OutlinedButton(onClick = { galleryFilter = "Photos"; showGallery = true }) { Text("Composer à partir de photos") }
     }
 }
