@@ -16,6 +16,8 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
 import com.example.MainActivity
 import com.example.R
+import kotlinx.coroutines.*
+import androidx.core.graphics.drawable.toBitmap
 
 /**
  * OnChat Rich Push Notification Manager
@@ -27,6 +29,47 @@ import com.example.R
  * - Custom RemoteViews styling with full backward compatibility
  */
 object OnChatNotificationHelper {
+    private val avatarScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val messageUpdates = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private val notificationSerial = java.util.concurrent.atomic.AtomicLong(0)
+    private fun messageNotificationId(conversationId: String) = NOTIFICATION_BASE_MSG_ID + (conversationId.hashCode() and 0x3fffffff)
+    private suspend fun notificationAvatar(context: Context, url: String?): Bitmap? {
+        if (url.isNullOrBlank()) return null
+        return runCatching {
+            val base = java.net.URI(com.example.data.api.ApiClient.BASE_URL)
+            val target = base.resolve(url)
+            if (target.scheme != "https") return null
+            val request = coil.request.ImageRequest.Builder(context.applicationContext).data(target.toString()).allowHardware(false)
+            val token = com.example.data.api.ApiClient.authToken
+            if (target.host == base.host && !token.isNullOrBlank()) {
+                request.addHeader("Authorization", "Bearer $token").addHeader("Cookie", "cashpay-token=$token")
+            }
+            val client = okhttp3.OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).callTimeout(5,java.util.concurrent.TimeUnit.SECONDS).build()
+            val loader = coil.ImageLoader.Builder(context.applicationContext).okHttpClient(client).build()
+            try { loader.execute(request.build()).drawable?.toBitmap() } finally { loader.shutdown() }
+        }.getOrNull()
+    }
+    fun cancelMessageNotification(context: Context, conversationId: String) {
+        messageUpdates.remove(conversationId)
+        NotificationManagerCompat.from(context).cancel(messageNotificationId(conversationId))
+    }
+    fun showReplyFailure(context: Context, conversationId: String) {
+        val open = Intent(context, MainActivity::class.java).putExtra(EXTRA_CONVERSATION_ID,conversationId).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP }
+        val pending = PendingIntent.getActivity(context,messageNotificationId(conversationId),open,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        runCatching { NotificationManagerCompat.from(context).notify(messageNotificationId(conversationId),NotificationCompat.Builder(context,CHANNEL_MESSAGES_ID).setSmallIcon(R.drawable.ic_onchat_notification).setContentTitle("Réponse non confirmée").setContentText("Ouvrir OnChat pour vérifier et réessayer.").setContentIntent(pending).setAutoCancel(true).build()) }
+    }
+    fun showVideoPublishedNotification(context: Context, videoId: Long, creator: String, avatarUrl: String?) {
+        createNotificationChannels(context)
+        val owner = signedInUserId
+        val open = Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://app.cashpay-all.com/onchat/videos/$videoId"))
+        val pending = PendingIntent.getActivity(context,videoId.hashCode(),open,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        fun post(avatar: Bitmap) { runCatching { NotificationManagerCompat.from(context).notify(videoId.hashCode() xor 0x40000000,NotificationCompat.Builder(context,CHANNEL_MESSAGES_ID).setSmallIcon(R.drawable.ic_onchat_notification).setLargeIcon(avatar).setContentTitle("Nouvelle vidéo OnChat").setContentText(creator).setContentIntent(pending).setOnlyAlertOnce(true).setAutoCancel(true).build()) } }
+        post(createCircularAvatarWithBorder(creator))
+        avatarScope.launch { val image = notificationAvatar(context,avatarUrl); if (image != null && signedInUserId == owner) post(image) }
+    }
+
+    @Volatile var appInForeground: Boolean = false
+    @Volatile var signedInUserId: Long? = null
     private const val TAG = "OnChatNotifHelper"
 
     const val CHANNEL_CALLS_ID = "onchat_incoming_calls"
@@ -441,16 +484,21 @@ object OnChatNotificationHelper {
         conversationId: String,
         senderName: String,
         senderWalletId: String?,
-        messageText: String
+        messageText: String,
+        senderAvatar: String? = null,
+        avatarOverride: Bitmap? = null
     ) {
         createNotificationChannels(context)
 
-        val avatarBitmap = createCircularAvatarWithBorder(
+        val update = notificationSerial.incrementAndGet()
+        messageUpdates[conversationId] = update
+        val owner = signedInUserId
+        val avatarBitmap = avatarOverride ?: createCircularAvatarWithBorder(
             name = senderName,
             borderColor = Color.parseColor("#38BDF8")
         )
         val onchatLogoBitmap = getCircularAppLogoBadge(context)
-        val notificationId = NOTIFICATION_BASE_MSG_ID + (Math.abs(conversationId.hashCode()) % 1000)
+        val notificationId = messageNotificationId(conversationId)
 
         // Tap on notification opens the specific chat
         val openChatIntent = Intent(context, MainActivity::class.java).apply {
@@ -470,12 +518,13 @@ object OnChatNotificationHelper {
             .setLabel("Répondre...")
             .build()
 
-        val replyIntent = Intent(context, MainActivity::class.java).apply {
+        val replyIntent = Intent(context, com.example.service.NotificationReplyReceiver::class.java).apply {
             action = ACTION_REPLY_MESSAGE
+            putExtra("ownerUserId", owner ?: -1L)
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_CONVERSATION_ID, conversationId)
         }
-        val replyPendingIntent = PendingIntent.getActivity(
+        val replyPendingIntent = PendingIntent.getBroadcast(
             context,
             notificationId + 2000,
             replyIntent,
@@ -497,7 +546,8 @@ object OnChatNotificationHelper {
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_MESSAGES_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setSmallIcon(R.drawable.ic_onchat_notification)
+            .setOnlyAlertOnce(true)
             .setLargeIcon(avatarBitmap)
             .setContentTitle(senderName)
             .setContentText(messageText)
@@ -520,5 +570,12 @@ object OnChatNotificationHelper {
         } catch (e: Exception) {
             Log.e(TAG, "Could not show message notification: ${e.message}")
         }
+        if (!senderAvatar.isNullOrBlank() && avatarOverride == null) avatarScope.launch {
+            val actual = notificationAvatar(context, senderAvatar)
+            if (actual != null && messageUpdates[conversationId] == update && signedInUserId == owner) {
+                showMessageNotification(context,conversationId,senderName,senderWalletId,messageText,avatarOverride = actual)
+            }
+        }
+
     }
 }

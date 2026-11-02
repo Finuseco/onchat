@@ -51,6 +51,9 @@ interface ConversationDao {
 
 @Dao
 interface MessageDao {
+    @Query("SELECT EXISTS(SELECT 1 FROM messages WHERE id = :id)")
+    suspend fun hasMessage(id: String): Boolean
+
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY timestamp ASC")
     fun getMessagesFlow(conversationId: String): Flow<List<MessageEntity>>
 

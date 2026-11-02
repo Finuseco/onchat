@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -22,11 +23,23 @@ import java.net.URI
 /** Shared authenticated meeting UI: one admission/PIN and organizer flow for web and Android. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun MeetingWebScreen(url: String, onClose: () -> Unit) {
+fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = false, onConnected: (Boolean) -> Unit = {}) {
+    if(directCall)LegacyMeetingWebScreen(url,onClose,true,onConnected)
+    else NativeMeetingAdmission(url,onClose,onConnected)
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun LegacyMeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean, onConnected: (Boolean) -> Unit) {
     val context = LocalContext.current
+    var nativeMeeting by remember { mutableStateOf<SfuMeetingTicket?>(null) }
+    var loadProgress by remember { mutableIntStateOf(0) }
     var view by remember { mutableStateOf<WebView?>(null) }
     var pending by remember { mutableStateOf<PermissionRequest?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val connectedCallback by rememberUpdatedState(onConnected)
+    val closeCallback by rememberUpdatedState(onClose)
+    val audioManager = remember { context.getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager }
     val origin = remember { URI(ApiClient.BASE_URL) }
     fun trusted(uri: Uri) = uri.scheme == "https" && uri.host == origin.host && uri.port in listOf(-1, 443)
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -35,16 +48,32 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
             if (result.isNotEmpty() && result.values.all { it }) request.grant(request.resources) else request.deny()
         }
     }
-    BackHandler { val current = view; if (current?.canGoBack() == true) current.goBack() else onClose() }
+    BackHandler { if(nativeMeeting!=null)onClose() else { val current = view; if (current?.canGoBack() == true) current.goBack() else onClose() } }
     DisposableEffect(Unit) {
-        onDispose { pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
+        onDispose { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) }; audioManager.mode = android.media.AudioManager.MODE_NORMAL; audioManager.isSpeakerphoneOn = false; pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
     }
     Column(Modifier.fillMaxSize()) {
-        Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
+        if (!directCall && nativeMeeting == null) Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
+        if (nativeMeeting == null && loadProgress in 0..99 && error == null) LinearProgressIndicator(progress = { loadProgress / 100f }, modifier = Modifier.fillMaxWidth())
         if (error != null) { Text(error!!); Button(onClick = { view?.reload(); error = null }) { Text("Réessayer") } }
-        AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = {
+        nativeMeeting?.let { ticket -> Box(Modifier.fillMaxWidth().weight(1f)) { NativeSfuMeetingScreen(ticket,onClose,onConnected) } }
+        AndroidView(modifier = if(nativeMeeting==null)Modifier.fillMaxWidth().weight(1f) else Modifier.size(1.dp), factory = {
             WebView(context).apply {
                 view = this
+                run {
+                    audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                    audioManager.isSpeakerphoneOn = false
+                    addJavascriptInterface(object {
+                        @JavascriptInterface fun nativeMeetingEnabled(): Boolean = !directCall
+                        @JavascriptInterface fun startSfuMeeting(payload: String) { if(!directCall) post { runCatching { SfuMeetingTicket.parse(payload) }.onSuccess { nativeMeeting = it }.onFailure { error = "Connexion média invalide. Réessayez." } } }
+                        @JavascriptInterface fun connectionUrl(): String = com.example.BuildConfig.ONCHAT_WS_URL
+                        @JavascriptInterface fun setSpeaker(enabled: Boolean) { post { audioManager.isSpeakerphoneOn = enabled } }
+                        @JavascriptInterface fun mediaState(video: Boolean) { post { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, true, video) } } }
+                        @JavascriptInterface fun mediaStopped() { post { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) } } }
+                        @JavascriptInterface fun connected(value: Boolean) { post { connectedCallback(value) } }
+                        @JavascriptInterface fun closeCall() { post { closeCallback() } }
+                    }, "OnChatAudio")
+                }
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = false
@@ -57,11 +86,15 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
                         if (!trusted(request.url)) { error = "Ce lien sort de l’espace OnChat."; return true }
                         return false
                     }
+                    override fun onReceivedHttpError(webView:WebView,request:WebResourceRequest,response:WebResourceResponse){
+                        if(request.isForMainFrame)error="La page OnChat n’est pas disponible (HTTP ${response.statusCode})."
+                    }
                     override fun onReceivedError(webView: WebView, request: WebResourceRequest, failure: WebResourceError) {
                         if (request.isForMainFrame) error = "Connexion à OnChat impossible. Vérifiez votre réseau."
                     }
                 }
                 webChromeClient = object : WebChromeClient() {
+                    override fun onProgressChanged(webView: WebView, newProgress: Int) { loadProgress = newProgress }
                     override fun onPermissionRequest(request: PermissionRequest) {
                         post {
                             val supported = setOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE, PermissionRequest.RESOURCE_VIDEO_CAPTURE)
@@ -75,6 +108,7 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit) {
                     }
                     override fun onPermissionRequestCanceled(request: PermissionRequest) { if (pending === request) pending = null }
                 }
+                if (!trusted(Uri.parse(url))) { error = "Adresse OnChat non autorisée."; return@apply }
                 val token = ApiClient.authToken
                 if (token.isNullOrBlank()) error = "Votre session a expiré. Reconnectez-vous."
                 else CookieManager.getInstance().setCookie(ApiClient.BASE_URL, "cashpay-token=$token; Path=/; Secure; HttpOnly; SameSite=Lax") { accepted ->

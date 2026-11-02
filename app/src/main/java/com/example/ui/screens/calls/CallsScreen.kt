@@ -66,6 +66,7 @@ fun CallsScreen(
     // State flows
     val recentMeetings by viewModel.recentMeetings.collectAsState()
     val isMeetingsLoading by viewModel.isMeetingsLoading.collectAsState()
+    LaunchedEffect(Unit) { viewModel.fetchCallsHistoryApi() }
     val apiCallsHistory by viewModel.apiCallsHistory.collectAsState()
     val localCalls by viewModel.calls.collectAsState()
     val isSkeletonLoading by viewModel.isSkeletonLoading.collectAsState()

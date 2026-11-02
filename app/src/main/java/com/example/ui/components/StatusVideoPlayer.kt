@@ -47,6 +47,7 @@ fun StatusVideoPlayer(
     modifier: Modifier = Modifier,
     isPaused: Boolean = false,
     showWatermark: Boolean = true,
+    thumbnailUrl: String? = null,
     onPosition: (Long) -> Unit = {},
     onVideoEnded: () -> Unit = {}
 ) {
@@ -54,6 +55,9 @@ fun StatusVideoPlayer(
     val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
     val positionCallback by rememberUpdatedState(onPosition)
     var localIsPaused by remember { mutableStateOf(isPaused) }
+    var buffering by remember(videoUrl) { mutableStateOf(true) }
+    var firstFrame by remember(videoUrl) { mutableStateOf(false) }
+    var playbackError by remember(videoUrl) { mutableStateOf(false) }
     var duration by remember { mutableLongStateOf(0L) }
     var currentPosition by remember { mutableLongStateOf(0L) }
 
@@ -99,7 +103,10 @@ fun StatusVideoPlayer(
 
     DisposableEffect(Unit) {
         val listener = object : Player.Listener {
+            override fun onRenderedFirstFrame() { firstFrame = true }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { buffering = false; playbackError = true }
             override fun onPlaybackStateChanged(playbackState: Int) {
+                buffering = playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_IDLE
                 if (playbackState == Player.STATE_READY) {
                     duration = exoPlayer.duration
                 }
@@ -135,7 +142,8 @@ fun StatusVideoPlayer(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null
             ) {
-                localIsPaused = !localIsPaused
+                if (playbackError) { playbackError = false; buffering = true; localIsPaused = false; exoPlayer.prepare() }
+                else localIsPaused = !localIsPaused
             },
         contentAlignment = Alignment.Center
     ) {
@@ -155,6 +163,16 @@ fun StatusVideoPlayer(
             modifier = Modifier.fillMaxSize()
         )
 
+        if (!firstFrame && !thumbnailUrl.isNullOrBlank()) {
+            coil.compose.AsyncImage(model = thumbnailUrl, contentDescription = "Miniature de la vidéo", contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        }
+        if (buffering && !localIsPaused) {
+            Box(Modifier.size(88.dp), contentAlignment = Alignment.Center) {
+                androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.fillMaxSize(), color = OnChatCyan, strokeWidth = 4.dp)
+                Icon(Icons.Default.PlayArrow, contentDescription = "Chargement de la vidéo", tint = Color.White, modifier = Modifier.size(40.dp))
+            }
+        }
+        if (playbackError) Text("Lecture interrompue. Touchez pour réessayer.", color = Color.White, modifier = Modifier.background(Color.Black.copy(alpha = 0.7f)).padding(12.dp))
         // Subtle glowing Pause indicator
         AnimatedVisibility(
             visible = localIsPaused,

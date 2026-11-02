@@ -86,7 +86,7 @@ fun VideoEditorScreen(
     var renderedPreview by remember { mutableStateOf<java.io.File?>(null) }
     var renderingPreview by remember { mutableStateOf(false) }
     DisposableEffect(Unit) { onDispose { renderedPreview?.delete() } }
-    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { photos = it.take(100) }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(100)) { photos = it.take(100) }
 
     // --- Editing State Variables ---
     // 1. Trim & Speed
@@ -103,16 +103,21 @@ fun VideoEditorScreen(
     val currentDuration = (if (sourceIsPhoto) secondsPerPhoto else totalDurationSeconds * (trimEndRatio - trimStartRatio) / playbackSpeed) + photos.size * secondsPerPhoto
 
     // 2. Audio & Sound
-    var isAudioMuted by remember { mutableStateOf(false) }
+    var isAudioMuted by remember { mutableStateOf(reusedSound != null) }
     var audioVolume by remember { mutableFloatStateOf(1.0f) }
     var musicVolume by remember { mutableFloatStateOf(0.7f) }
     var selectedMusicTitle by remember { mutableStateOf(reusedSound?.let { "${it.title} • ${it.authorName}" } ?: "Son original") }
     var selectedMusicUri by remember { mutableStateOf<Uri?>(reusedSound?.let { Uri.parse(it.url) }) }
-    val musicPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        selectedSound = null
-        rightsConfirmed = false
-        selectedMusicUri = uri
-        selectedMusicTitle = if (uri == null) "Son original" else "Fichier audio sélectionné"
+    var showAudioGallery by remember { mutableStateOf(false) }
+
+    if (showAudioGallery) androidx.compose.ui.window.Dialog(onDismissRequest = { showAudioGallery = false }, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        OnChatMediaGalleryPicker(audioOnly = true, onDismiss = { showAudioGallery = false }, onMediaSelected = { value, _ ->
+            selectedSound = null
+            rightsConfirmed = false
+            selectedMusicUri = Uri.parse(value)
+            selectedMusicTitle = "Fichier audio sélectionné"
+            showAudioGallery = false
+        })
     }
 
     // 3. Text Overlays
@@ -433,7 +438,7 @@ fun VideoEditorScreen(
             }
 
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AssistChip(onClick = { photoPicker.launch("image/*") }, label = { Text("Photos (${photos.size})") })
+                AssistChip(onClick = { photoPicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, label = { Text("Photos (${photos.size})") })
                 AssistChip(enabled = !renderingPreview && !isPublishing && currentDuration <= 600, onClick = {
                     editorScope.launch {
                         renderingPreview = true
@@ -536,7 +541,7 @@ fun VideoEditorScreen(
                                         onClick = { selectedMusicUri = null; selectedMusicTitle = "Son original"; selectedSound = null },
                                         label = { Text("Son original") })
                                     FilterChip(selected = selectedMusicUri != null,
-                                        onClick = { musicPicker.launch("audio/*") },
+                                        onClick = { showAudioGallery = true },
                                         label = { Text("Choisir une musique") })
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))

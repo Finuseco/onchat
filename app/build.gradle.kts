@@ -14,9 +14,9 @@ android {
         applicationId = "com.aistudio.onchat.vqpz"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "5.0"
-        val wsUrl = providers.gradleProperty("onchatWsUrl").orElse("wss://glob.cashpay-all.com/ws").get()
+        versionCode = 14
+        versionName = "5.9"
+        val wsUrl = providers.gradleProperty("onchatWsUrl").orElse("wss://app.cashpay-all.com/ws").get()
         require(wsUrl.startsWith("wss://") && !wsUrl.contains('"')) { "onchatWsUrl must be a secure public WebSocket URL" }
         buildConfigField("String", "ONCHAT_WS_URL", "\"$wsUrl\"")
 
@@ -80,6 +80,8 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation("androidx.camera:camera-video:1.5.0")
 
+    implementation("io.livekit:livekit-android:2.11.0")
+
     // Retrofit & OkHttp
     implementation(libs.retrofit)
     implementation(libs.converter.moshi)
@@ -90,8 +92,11 @@ dependencies {
     implementation(libs.moshi.kotlin)
     ksp(libs.moshi.kotlin.codegen)
 
+    implementation("com.google.android.gms:play-services-auth-api-phone:18.2.0")
+
     // Coil
     implementation(libs.coil.compose)
+    implementation("io.coil-kt:coil-video:2.7.0")
 
     // Media3
     implementation(libs.androidx.media3.exoplayer)
