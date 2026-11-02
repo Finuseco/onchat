@@ -24,6 +24,13 @@ import java.net.URI
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = false, onConnected: (Boolean) -> Unit = {}) {
+    if(directCall)LegacyMeetingWebScreen(url,onClose,true,onConnected)
+    else NativeMeetingAdmission(url,onClose,onConnected)
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun LegacyMeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean, onConnected: (Boolean) -> Unit) {
     val context = LocalContext.current
     var nativeMeeting by remember { mutableStateOf<SfuMeetingTicket?>(null) }
     var loadProgress by remember { mutableIntStateOf(0) }
@@ -78,6 +85,9 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = fal
                     override fun shouldOverrideUrlLoading(webView: WebView, request: WebResourceRequest): Boolean {
                         if (!trusted(request.url)) { error = "Ce lien sort de l’espace OnChat."; return true }
                         return false
+                    }
+                    override fun onReceivedHttpError(webView:WebView,request:WebResourceRequest,response:WebResourceResponse){
+                        if(request.isForMainFrame)error="La page OnChat n’est pas disponible (HTTP ${response.statusCode})."
                     }
                     override fun onReceivedError(webView: WebView, request: WebResourceRequest, failure: WebResourceError) {
                         if (request.isForMainFrame) error = "Connexion à OnChat impossible. Vérifiez votre réseau."

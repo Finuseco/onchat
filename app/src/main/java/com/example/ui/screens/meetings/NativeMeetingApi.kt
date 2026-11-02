@@ -13,7 +13,7 @@ internal object NativeMeetingApi {
  private val client=OkHttpClient.Builder().callTimeout(20,TimeUnit.SECONDS).followRedirects(false).build()
  suspend fun request(code:String,operation:String,body:JSONObject?=null):JSONObject=withContext(Dispatchers.IO){
   require(code.matches(Regex("[A-Za-z0-9_-]{4,64}")))
-  require(operation in setOf("connection","participants","messages","raise-hand","grant-speech","mute-all","kick","end","leave","billing"))
+  require(operation in setOf("join","connection","participants","messages","raise-hand","grant-speech","mute-all","kick","end","leave","billing"))
   val token=ApiClient.authToken?:error("Session expirée")
   val builder=Request.Builder().url(ApiClient.BASE_URL+"api/v1/meetings/$code/$operation").header("Authorization","Bearer $token").header("Cookie","cashpay-token=$token")
   if(body!=null)builder.post(body.toString().toRequestBody("application/json".toMediaType()))

@@ -1,6 +1,7 @@
 package com.example.ui.screens.profile
 
 import android.widget.Toast
+import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -104,6 +105,12 @@ fun PublicProfileScreen(
             targetConv?.contactVerificationStatus == "verified"
 
     val relation = profileResp?.relation
+    var showMediaProfile by remember(targetUserId){mutableStateOf(false)}
+    if(showMediaProfile && targetUserId>0){
+        val mediaScope=rememberCoroutineScope()
+        com.example.ui.screens.reels.CreatorMediaProfile(targetUserId,viewModel,{showMediaProfile=false},{id->mediaScope.launch{viewModel.openSharedVideo(id);showMediaProfile=false}})
+        return
+    }
     val stats = profileResp?.stats
     val media = profileResp?.media ?: emptyList()
 
@@ -478,6 +485,8 @@ fun PublicProfileScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
+                    TextButton(onClick={showMediaProfile=true}){Text("Profil média, vidéos et sons")}
+
                     // Stats Bar
                     Row(
                         modifier = Modifier
@@ -487,9 +496,9 @@ fun PublicProfileScreen(
                             .padding(vertical = 14.dp, horizontal = 8.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly
                     ) {
-                        StatMetric(label = "Abonnés", count = stats?.followers ?: if (isFollowing) 1 else 0)
+                        StatMetric(label = "Abonnés", count = pFromPublic?.followers?.count ?: stats?.followers ?: 0)
                         Divider(modifier = Modifier.height(28.dp).width(1.dp), color = CashPayNavyBorder)
-                        StatMetric(label = "Suivis", count = stats?.following ?: 0)
+                        StatMetric(label = "Suivis", count = pFromPublic?.following?.count ?: stats?.following ?: 0)
                         Divider(modifier = Modifier.height(28.dp).width(1.dp), color = CashPayNavyBorder)
                         StatMetric(label = "Publications", count = userVideos.size + media.size)
                     }
@@ -578,12 +587,7 @@ fun PublicProfileScreen(
                                             .background(Color(0xFF1E1E24))
                                             .clickable { selectedVideoForPlayback = video }
                                     ) {
-                                        AsyncImage(
-                                            model = video.resolvedThumbnailUrl ?: video.resolvedUrl,
-                                            contentDescription = null,
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = ContentScale.Crop
-                                        )
+                                        com.example.ui.screens.reels.MediaVideoThumbnail(video,Modifier.fillMaxSize())
 
                                         // Dark gradient for views & comments text
                                         Box(

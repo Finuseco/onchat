@@ -14,8 +14,8 @@ android {
         applicationId = "com.aistudio.onchat.vqpz"
         minSdk = 24
         targetSdk = 35
-        versionCode = 13
-        versionName = "5.8"
+        versionCode = 14
+        versionName = "5.9"
         val wsUrl = providers.gradleProperty("onchatWsUrl").orElse("wss://app.cashpay-all.com/ws").get()
         require(wsUrl.startsWith("wss://") && !wsUrl.contains('"')) { "onchatWsUrl must be a secure public WebSocket URL" }
         buildConfigField("String", "ONCHAT_WS_URL", "\"$wsUrl\"")

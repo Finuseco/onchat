@@ -317,7 +317,8 @@ fun LiveReelsScreen(
                     allVideos = realVideos,
                     viewModel = viewModel,
                     session = session,
-                    onDismiss = { activeProfileVideo = null }
+                    onDismiss = { activeProfileVideo = null },
+                    onUseSound = { sound -> reusedSound=sound; activeProfileVideo=null; showCaptureScreen=true }
                 )
             }
         }
@@ -913,191 +914,13 @@ fun ReelsUserProfileDialog(
     allVideos: List<VideoItem>,
     viewModel: OnChatViewModel,
     session: UserSessionEntity?,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onUseSound: (ReusableSound) -> Unit = {}
 ) {
-    val creatorName = video.publisher?.resolvedName ?: "Créateur OnChat"
-    val creatorAvatar = video.publisher?.resolvedAvatar
-    val creatorPhone = video.publisher?.phone
-    val creatorId = video.publisher?.id ?: video.publisher?.ownerId ?: 0L
-
-    val isSelf = session?.userId == creatorId ||
-            (!session?.phone.isNullOrBlank() && session?.phone == creatorPhone)
-
-    var isFollowing by remember { mutableStateOf(video.follow?.isFollowing == true) }
-    var publicProfileResp by remember { mutableStateOf<PhoneProfileResponse?>(null) }
-    var isLoadingProfile by remember { mutableStateOf(true) }
-
-    val creatorVideos = remember(video, allVideos) {
-        allVideos.filter {
-            it.publisher?.id == creatorId ||
-                    (!creatorPhone.isNullOrBlank() && it.publisher?.phone == creatorPhone)
-        }.ifEmpty { listOf(video) }
-    }
-
-    LaunchedEffect(creatorPhone) {
-        if (!creatorPhone.isNullOrBlank()) {
-            isLoadingProfile = true
-            val profileRes = viewModel.searchProfileByPhone(creatorPhone)
-            if (profileRes?.profile != null) {
-                val fullPublic = viewModel.repository.getPublicProfile(creatorPhone).getOrNull()
-                publicProfileResp = fullPublic
-            }
-            isLoadingProfile = false
-        } else {
-            isLoadingProfile = false
-        }
-    }
-
-    // REAL BACKEND COUNTERS (NO FAKE / MOCK DEFAULTS)
-    val followersCount = publicProfileResp?.profile?.followers?.count
-        ?: publicProfileResp?.stats?.followers
-        ?: 0
-
-    val followingCount = publicProfileResp?.profile?.following?.count
-        ?: publicProfileResp?.stats?.following
-        ?: 0
-
-    val likesCount = video.interactions?.likes ?: 0
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF09090B))
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-        ) {
-            // Header Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Retour", tint = Color.White)
-                }
-                Text(
-                    text = "@${creatorName.lowercase().replace(" ", "")}",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
-                IconButton(onClick = {}) {
-                    Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = Color.White)
-                }
-            }
-
-            // Profile Info (Avatar, Stats, Bio, Follow Button)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                AvatarBadge(name = creatorName, avatarUrl = creatorAvatar, size = 80.dp)
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(creatorName, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White)
-                Text(if (isSelf) "Mon Profil Média" else "Créateur OnChat", fontSize = 13.sp, color = OnChatCyan)
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (isLoadingProfile) {
-                    CircularProgressIndicator(color = OnChatCyan, modifier = Modifier.size(24.dp))
-                } else {
-                    // REAL Stats: Abonnements, Abonnés, J'aime (displaying 0 if none)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(formatCount(followingCount), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            Text("Abonnements", fontSize = 12.sp, color = Color.Gray)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(formatCount(followersCount), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            Text("Abonnés", fontSize = 12.sp, color = Color.Gray)
-                        }
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(formatCount(likesCount), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                            Text("J'aime", fontSize = 12.sp, color = Color.Gray)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (!isSelf) {
-                    // Follow Button
-                    Button(
-                        onClick = {
-                            if (creatorId > 0 && video.publisher?.type == "user") {
-                                val next = !isFollowing
-                                viewModel.performSocialAction(creatorId, if (next) "follow" else "unfollow", onComplete = { success -> if (success) isFollowing = next })
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth(0.6f)
-                            .height(40.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isFollowing) Color(0xFF27272A) else OnChatMagenta
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    ) {
-                        Text(
-                            text = if (isFollowing) "Abonné ✓" else "S'abonner",
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-            HorizontalDivider(color = Color(0xFF27272A))
-
-            // Videos Grid
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                items(creatorVideos) { item ->
-                    Box(
-                        modifier = Modifier
-                            .aspectRatio(0.75f)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF1E1E24))
-                            .clickable { onDismiss() },
-                        contentAlignment = Alignment.BottomStart
-                    ) {
-                        AsyncImage(
-                            model = item.resolvedThumbnailUrl ?: item.resolvedUrl,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.8f))))
-                                .padding(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                            Text(formatCount(item.interactions?.likes ?: 0), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
+    val scope=rememberCoroutineScope()
+    val id=video.publisher?.id?:video.publisher?.ownerId?:0L
+    if(id>0)CreatorMediaProfile(id,viewModel,onDismiss,onVideo={selected->scope.launch{viewModel.openSharedVideo(selected);onDismiss()}},onUseSound=onUseSound)
+    else Column(Modifier.fillMaxSize()){Text("Identité du créateur indisponible.");TextButton(onClick=onDismiss){Text("Retour")}}
 }
 
 @Composable
