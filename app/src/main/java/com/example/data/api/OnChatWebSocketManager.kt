@@ -88,6 +88,8 @@ class OnChatWebSocketManager private constructor() {
         webSocket?.send(org.json.JSONObject().put("event", "meet.unwatch").put("data", org.json.JSONObject().put("meetCode", code)).toString())
     }
 
+    private val _meetingChatUpdates=MutableSharedFlow<String>(extraBufferCapacity=32)
+    val meetingChatUpdates=_meetingChatUpdates.asSharedFlow()
     private val _socialUpdates = MutableSharedFlow<WsEventEnvelope>(extraBufferCapacity = 32)
     val socialUpdates: SharedFlow<WsEventEnvelope> = _socialUpdates.asSharedFlow()
 
@@ -285,6 +287,7 @@ class OnChatWebSocketManager private constructor() {
             val effectiveEvent = if ((eventType == "notification" || eventType == "punch" || eventType == "push") && !innerEvent.isNullOrBlank()) innerEvent else eventType
 
             when (effectiveEvent) {
+                "meet.chat.created" -> dataMap?.get("meetCode")?.toString()?.let {code->coroutineScope.launch{_meetingChatUpdates.emit(code)}}
                 "video.published", "video.comment.created", "social.follow.changed" -> if (envelope != null) coroutineScope.launch { _socialUpdates.emit(envelope) }
                 "presence.snapshot" -> {
                     val users = dataMap?.get("users") as? List<*>

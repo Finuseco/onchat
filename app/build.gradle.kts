@@ -14,8 +14,8 @@ android {
         applicationId = "com.aistudio.onchat.vqpz"
         minSdk = 24
         targetSdk = 35
-        versionCode = 12
-        versionName = "5.7"
+        versionCode = 13
+        versionName = "5.8"
         val wsUrl = providers.gradleProperty("onchatWsUrl").orElse("wss://app.cashpay-all.com/ws").get()
         require(wsUrl.startsWith("wss://") && !wsUrl.contains('"')) { "onchatWsUrl must be a secure public WebSocket URL" }
         buildConfigField("String", "ONCHAT_WS_URL", "\"$wsUrl\"")
@@ -79,6 +79,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation("androidx.camera:camera-video:1.5.0")
+
+    implementation("io.livekit:livekit-android:2.11.0")
 
     // Retrofit & OkHttp
     implementation(libs.retrofit)

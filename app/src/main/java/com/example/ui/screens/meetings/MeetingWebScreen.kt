@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -24,6 +25,7 @@ import java.net.URI
 @Composable
 fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = false, onConnected: (Boolean) -> Unit = {}) {
     val context = LocalContext.current
+    var nativeMeeting by remember { mutableStateOf<SfuMeetingTicket?>(null) }
     var loadProgress by remember { mutableIntStateOf(0) }
     var view by remember { mutableStateOf<WebView?>(null) }
     var pending by remember { mutableStateOf<PermissionRequest?>(null) }
@@ -39,21 +41,24 @@ fun MeetingWebScreen(url: String, onClose: () -> Unit, directCall: Boolean = fal
             if (result.isNotEmpty() && result.values.all { it }) request.grant(request.resources) else request.deny()
         }
     }
-    BackHandler { val current = view; if (current?.canGoBack() == true) current.goBack() else onClose() }
+    BackHandler { if(nativeMeeting!=null)onClose() else { val current = view; if (current?.canGoBack() == true) current.goBack() else onClose() } }
     DisposableEffect(Unit) {
         onDispose { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, false) }; audioManager.mode = android.media.AudioManager.MODE_NORMAL; audioManager.isSpeakerphoneOn = false; pending?.deny(); pending = null; view?.apply { stopLoading(); loadUrl("about:blank"); destroy() }; view = null }
     }
     Column(Modifier.fillMaxSize()) {
-        if (!directCall) Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
-        if (loadProgress in 0..99 && error == null) LinearProgressIndicator(progress = { loadProgress / 100f }, modifier = Modifier.fillMaxWidth())
+        if (!directCall && nativeMeeting == null) Surface(color = CashPayNavyDark) { Row(Modifier.fillMaxWidth().statusBarsPadding()) { TextButton(onClick = onClose) { Text("Fermer la réunion") } } }
+        if (nativeMeeting == null && loadProgress in 0..99 && error == null) LinearProgressIndicator(progress = { loadProgress / 100f }, modifier = Modifier.fillMaxWidth())
         if (error != null) { Text(error!!); Button(onClick = { view?.reload(); error = null }) { Text("Réessayer") } }
-        AndroidView(modifier = Modifier.fillMaxWidth().weight(1f), factory = {
+        nativeMeeting?.let { ticket -> Box(Modifier.fillMaxWidth().weight(1f)) { NativeSfuMeetingScreen(ticket,onClose,onConnected) } }
+        AndroidView(modifier = if(nativeMeeting==null)Modifier.fillMaxWidth().weight(1f) else Modifier.size(1.dp), factory = {
             WebView(context).apply {
                 view = this
                 run {
                     audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
                     audioManager.isSpeakerphoneOn = false
                     addJavascriptInterface(object {
+                        @JavascriptInterface fun nativeMeetingEnabled(): Boolean = !directCall
+                        @JavascriptInterface fun startSfuMeeting(payload: String) { if(!directCall) post { runCatching { SfuMeetingTicket.parse(payload) }.onSuccess { nativeMeeting = it }.onFailure { error = "Connexion média invalide. Réessayez." } } }
                         @JavascriptInterface fun connectionUrl(): String = com.example.BuildConfig.ONCHAT_WS_URL
                         @JavascriptInterface fun setSpeaker(enabled: Boolean) { post { audioManager.isSpeakerphoneOn = enabled } }
                         @JavascriptInterface fun mediaState(video: Boolean) { post { runCatching { com.example.service.OnChatBackgroundService.mediaState(context, true, video) } } }
