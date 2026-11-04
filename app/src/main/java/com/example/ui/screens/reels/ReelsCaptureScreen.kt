@@ -31,7 +31,7 @@ import java.io.File
 
 @SuppressLint("MissingPermission")
 @Composable
-fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) -> Unit) {
+fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) -> Unit, soundtrack: String? = null) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
     val executor = remember { ContextCompat.getMainExecutor(context) }
@@ -51,15 +51,13 @@ fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) ->
         cameraAllowed = it[Manifest.permission.CAMERA] == true
         audioAllowed = it[Manifest.permission.RECORD_AUDIO] == true
     }
-    val gallery = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { val mime = context.contentResolver.getType(it).orEmpty(); if (mime.startsWith("video/") || mime.startsWith("image/")) onMediaSelected(it.toString(), if (mime.startsWith("image/")) "photo" else "video") }
-    }
+    var showGallery by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (!cameraAllowed) permission.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) }
-    DisposableEffect(owner, front, photoMode, cameraAllowed) {
+    DisposableEffect(owner, front, photoMode, cameraAllowed, showGallery) {
         val future = ProcessCameraProvider.getInstance(context)
         var disposed = false
         ready = false
-        if (cameraAllowed) future.addListener({
+        if (cameraAllowed && !showGallery) future.addListener({
             if (!disposed) try {
                 val provider = future.get()
                 val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
@@ -71,9 +69,16 @@ fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) ->
         onDispose { disposed = true; if (future.isDone) runCatching { future.get().unbindAll() } }
     }
     DisposableEffect(Unit) { onDispose { recording?.close() } }
+    val soundtrackPlayer=remember(soundtrack){soundtrack?.takeIf{it.isNotBlank()}?.let{source->androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply{setMediaItem(androidx.media3.common.MediaItem.fromUri(source));repeatMode=androidx.media3.common.Player.REPEAT_MODE_ONE;prepare()}}}
+    DisposableEffect(soundtrackPlayer){onDispose{soundtrackPlayer?.release()}}
+    LaunchedEffect(recording!=null,soundtrackPlayer){soundtrackPlayer?.playWhenReady=recording!=null}
     LaunchedEffect(recording != null) {
         seconds = 0
         while (recording != null) { delay(1000); seconds++; if (seconds >= limit) { recording?.stop(); recording = null; finalizing = true } }
+    }
+    if (showGallery) {
+        OnChatMediaGalleryPicker(onDismiss = { showGallery = false }, onMediaSelected = { value, type -> showGallery = false; onMediaSelected(value, if (type == "image") "photo" else type) })
+        return
     }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (cameraAllowed) AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
@@ -92,7 +97,7 @@ fun ReelsCaptureScreen(onClose: () -> Unit, onMediaSelected: (String, String) ->
                     if (!photoMode) listOf(15,60,600).forEach { value -> FilterChip(selected = limit == value, enabled = recording == null, onClick = { limit = value }, label = { Text(if (value == 600) "10 min" else "${value}s") }) }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(enabled = recording == null && !finalizing, onClick = { gallery.launch("*/*") }) { Text("Galerie") }
+                    OutlinedButton(enabled = recording == null && !finalizing, onClick = { showGallery = true }) { Text("Galerie") }
                     Button(enabled = ready && !finalizing, onClick = {
                         if (photoMode) {
                             val file = File(context.cacheDir, "photo_${java.util.UUID.randomUUID()}.jpg")

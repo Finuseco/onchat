@@ -75,7 +75,7 @@ object OnChatNotificationManager {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_onchat_notification)
             .setContentTitle(senderName)
             .setContentText(messageText)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -113,7 +113,7 @@ object OnChatNotificationManager {
         val typeStr = if (isVideo) "Appel Vidéo entrant" else "Appel Vocal entrant"
 
         val notification = NotificationCompat.Builder(context, CHANNEL_CALLS_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_onchat_notification)
             .setContentTitle(callerName)
             .setContentText("$typeStr...")
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -149,7 +149,7 @@ object OnChatNotificationManager {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_SOCIAL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_onchat_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)

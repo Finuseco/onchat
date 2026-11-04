@@ -49,7 +49,7 @@ data class ApiMessage(
     @Json(name = "senderAvatar") val senderAvatar: String? = null,
     @Json(name = "content") val content: String = "",
     @Json(name = "type") val type: String = "text", // text, audio, image, doc, product, in_chat_transfer, system
-    @Json(name = "metadata") val metadata: Map<String, String>? = null,
+    @Json(name = "metadata") val metadata: Map<String, Any?>? = null,
     @Json(name = "status") val status: String? = "delivered", // sent, delivered, read
     @Json(name = "isRead") val isRead: Boolean? = false,
     @Json(name = "timestamp") val timestamp: String? = null,
@@ -57,7 +57,10 @@ data class ApiMessage(
     @Json(name = "imageId") val imageId: String? = null,
     @Json(name = "fileUrl") val fileUrl: String? = null,
     @Json(name = "fileName") val fileName: String? = null
-)
+) {
+    val resolvedFileUrl: String? get() = fileUrl?.takeIf { it.isNotBlank() } ?: metadata?.get("fileUrl")?.toString()
+    val resolvedFileName: String? get() = fileName?.takeIf { it.isNotBlank() } ?: metadata?.get("fileName")?.toString()
+}
 
 @JsonClass(generateAdapter = true)
 data class ApiConversation(
@@ -468,7 +471,7 @@ data class WsEventEnvelope(
     @Json(name = "timestamp") val timestamp: String? = null
 ) {
     val resolvedEvent: String
-        get() = (event ?: type ?: "").lowercase()
+        get() = (event ?: type ?: "").lowercase().replace("call:", "call.").let { if (it == "call.hangup") "call.ended" else it }
 
     val resolvedConversationId: String?
         get() = conversationId ?: conversation_id ?: (data?.get("conversationId")?.toString()) ?: (data?.get("conversation_id")?.toString())
@@ -480,7 +483,7 @@ data class WsEventEnvelope(
         get() = walletId ?: wallet_id ?: (data?.get("walletId")?.toString())
 
     val resolvedCallId: String?
-        get() = callId ?: call_id ?: (data?.get("callId")?.toString())
+        get() = callId ?: call_id ?: (data?.get("callId")?.toString()) ?: (data?.get("call_id")?.toString())
 }
 
 @JsonClass(generateAdapter = true)

@@ -7,6 +7,9 @@ import retrofit2.Response
 import retrofit2.http.*
 
 interface OnChatApiService {
+    @GET("api/v1/onchat/notifications")
+    suspend fun recoverOnChatNotifications(@Query("cursor") cursor: String? = null): Response<RealtimeRecoveryResponse>
+
 
     // 0. Countries List (Active countries with code, name, dialCode)
     @GET("api/v1/countries")
@@ -86,6 +89,9 @@ interface OnChatApiService {
     suspend fun getProfileByPhone(
         @Query("phone") phone: String
     ): Response<PhoneProfileResponse>
+
+    @POST("api/v1/chat/conversations/{conversationId}/read")
+    suspend fun markChatRead(@Path("conversationId") conversationId: String): Response<SimpleResponse>
 
     @POST("api/v1/social/action")
     suspend fun performSocialAction(
@@ -415,10 +421,19 @@ interface OnChatApiService {
     @GET("api/v1/media/videos/{id}/sound")
     suspend fun getReusableSound(@Path("id") id: Long): Response<SoundResponse>
 
+    @PATCH("api/v1/media/videos/{id}/sound")
+    suspend fun updateOriginalSound(@Path("id") id:Long, @Body body:Map<String, @JvmSuppressWildcards Any>): Response<SoundResponse>
+    @PUT("api/v1/media/videos/{id}/favorite")
+    suspend fun favoriteVideo(@Path("id") id:Long):Response<VideoFavoriteResponse>
+    @DELETE("api/v1/media/videos/{id}/favorite")
+    suspend fun unfavoriteVideo(@Path("id") id:Long):Response<VideoFavoriteResponse>
+
     @GET("api/v1/media/videos")
     suspend fun getVideos(
         @Query("limit") limit: Int? = 20,
-        @Query("offset") offset: Int? = 0
+        @Query("offset") offset: Int? = 0,
+        @Query("publisherId") publisherId: Long? = null,
+        @Query("feed") feed: String = "mine"
     ): Response<VideoListResponse>
 
     @GET("api/v1/media/videos/{id}")

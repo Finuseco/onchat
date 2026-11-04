@@ -561,39 +561,12 @@ fun LoginScreen(viewModel: OnChatViewModel) {
                             )
                             Spacer(modifier = Modifier.height(18.dp))
 
-                            OutlinedTextField(
+                            com.example.ui.components.OtpCodeField(
                                 value = otp,
-                                onValueChange = {
-                                    if (it.all { char -> char.isDigit() } && it.length <= 6) {
-                                        viewModel.onOtpChange(it)
-                                    }
-                                },
-                                label = { Text("Code à 6 chiffres", color = CashPayGrey) },
-                                placeholder = { Text("123456", color = CashPayGrey.copy(alpha = 0.5f)) },
-                                leadingIcon = {
-                                    Icon(Icons.Default.Pin, contentDescription = null, tint = OnChatCyan)
-                                },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = Color.White,
-                                    unfocusedTextColor = Color.White,
-                                    focusedBorderColor = OnChatCyan,
-                                    unfocusedBorderColor = CashPayNavyBorder,
-                                    cursorColor = OnChatCyan
-                                ),
-                                modifier = Modifier.fillMaxWidth()
+                                enabled = !loading,
+                                smsEnabled = selectedChannel?.type.equals("sms", ignoreCase = true),
+                                onValueChange = viewModel::onOtpChange
                             )
-
-                            Spacer(modifier = Modifier.height(20.dp))
-
-                            GradientButton(
-                                text = "Vérifier le code",
-                                onClick = { viewModel.submitOtp() },
-                                isLoading = loading,
-                                icon = Icons.Default.Check
-                            )
-
                             Spacer(modifier = Modifier.height(12.dp))
 
                             Row(

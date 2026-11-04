@@ -49,6 +49,8 @@ data class EndCallRequest(
 @JsonClass(generateAdapter = true)
 data class ApiCallDto(
     @Json(name = "id") val id: String,
+    @Json(name = "joinUrl") val joinUrl: String? = null,
+    @Json(name = "meeting_code") val meetingCode: String? = null,
     @Json(name = "caller_id") val callerId: String? = null,
     @Json(name = "receiver_id") val receiverId: String? = null,
     @Json(name = "is_video") val isVideo: Boolean = false,
@@ -67,7 +69,8 @@ data class ApiCallDto(
 @JsonClass(generateAdapter = true)
 data class CallActionResponse(
     @Json(name = "success") val success: Boolean = false,
-    @Json(name = "call") val call: ApiCallDto? = null
+    @Json(name = "call") val call: ApiCallDto? = null,
+    @Json(name = "error") val error: String? = null
 )
 
 @JsonClass(generateAdapter = true)

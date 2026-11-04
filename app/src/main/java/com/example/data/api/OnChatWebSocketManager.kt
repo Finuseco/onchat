@@ -26,9 +26,7 @@ class OnChatWebSocketManager private constructor() {
 
     companion object {
         private const val TAG = "OnChatWebSocket"
-        const val WS_URL_GLOB_PRIMARY = "wss://glob.cashpay-all.com/ws"
-        const val WS_URL_GLOB_REALTIME = "wss://glob.cashpay-all.com/ws/realtime"
-        const val WS_URL_GLOB_ROOT = "wss://glob.cashpay-all.com"
+
 
         @Volatile
         private var instance: OnChatWebSocketManager? = null
@@ -39,6 +37,8 @@ class OnChatWebSocketManager private constructor() {
             }
         }
     }
+
+    private val receivedEvents = RealtimeEventWindow()
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -88,6 +88,11 @@ class OnChatWebSocketManager private constructor() {
         webSocket?.send(org.json.JSONObject().put("event", "meet.unwatch").put("data", org.json.JSONObject().put("meetCode", code)).toString())
     }
 
+    private val _meetingChatUpdates=MutableSharedFlow<String>(extraBufferCapacity=32)
+    val meetingChatUpdates=_meetingChatUpdates.asSharedFlow()
+    private val _socialUpdates = MutableSharedFlow<WsEventEnvelope>(extraBufferCapacity = 32)
+    val socialUpdates: SharedFlow<WsEventEnvelope> = _socialUpdates.asSharedFlow()
+
     private val _incomingMessages = MutableSharedFlow<Pair<String, ApiMessage>>(extraBufferCapacity = 64)
     val incomingMessages: SharedFlow<Pair<String, ApiMessage>> = _incomingMessages.asSharedFlow()
 
@@ -112,9 +117,31 @@ class OnChatWebSocketManager private constructor() {
     private val typingJobs = mutableMapOf<String, Job>()
 
     var onReconnected: (() -> Unit)? = null
+    private var recoveryJob: Job? = null
+    private var recoveryCursor: String? = null
+    private fun startRecovery() {
+        if (recoveryJob?.isActive == true) return
+        val ownerToken = ApiClient.authToken ?: SessionTokenStore.getToken() ?: return
+        recoveryJob = coroutineScope.launch {
+            while (isActive && shouldReconnect) {
+                var more = false
+                try {
+                    val response = ApiClient.apiService.recoverOnChatNotifications(recoveryCursor)
+                    if ((ApiClient.authToken ?: SessionTokenStore.getToken()) != ownerToken) break
+                    val body = response.body()
+                    if (response.isSuccessful && body?.success == true) {
+                        for (event in body.events) handleIncomingMessage(envelopeAdapter.toJson(event))
+                        recoveryCursor = body.cursor
+                        more = body.hasMore
+                    }
+                } catch (error: Exception) { if (error is CancellationException) throw error }
+                delay(if (more) 250 else 15000)
+            }
+        }
+    }
 
     /**
-     * Connect to the central CashPay Realtime Engine (glob.cashpay-all.com)
+     * Connect to the shared CashPay WebSocket (same endpoint as Wallet Best)
      */
     fun connect() {
         if (_connectionStatus.value == WsConnectionStatus.CONNECTED || isConnecting.get()) {
@@ -128,6 +155,7 @@ class OnChatWebSocketManager private constructor() {
         if (!isConnecting.compareAndSet(false, true)) return
         _connectionStatus.value = WsConnectionStatus.CONNECTING
         shouldReconnect = true
+        startRecovery()
         val targetUrl = com.example.BuildConfig.ONCHAT_WS_URL
 
         val requestBuilder = Request.Builder()
@@ -144,15 +172,12 @@ class OnChatWebSocketManager private constructor() {
                 if (webSocket !== ws) return
                 Log.d(TAG, "WebSocket connected")
                 isConnecting.set(false)
-                val wasReconnecting = reconnectAttempt > 0
                 reconnectAttempt = 0
                 _connectionStatus.value = WsConnectionStatus.CONNECTED
                 
                 watchedMeetings.keys.forEach { subscribeMeeting(it) }
                 startHeartbeat()
-                if (wasReconnecting) {
-                    onReconnected?.invoke()
-                }
+                onReconnected?.invoke()
             }
 
             override fun onMessage(ws: WebSocket, text: String) {
@@ -262,6 +287,16 @@ class OnChatWebSocketManager private constructor() {
             val effectiveEvent = if ((eventType == "notification" || eventType == "punch" || eventType == "push") && !innerEvent.isNullOrBlank()) innerEvent else eventType
 
             when (effectiveEvent) {
+                "meet.chat.created" -> dataMap?.get("meetCode")?.toString()?.let {code->coroutineScope.launch{_meetingChatUpdates.emit(code)}}
+                "video.published", "video.comment.created", "social.follow.changed" -> if (envelope != null) coroutineScope.launch { _socialUpdates.emit(envelope) }
+                "presence.snapshot" -> {
+                    val users = dataMap?.get("users") as? List<*>
+                    _onlineUsers.value = users.orEmpty().flatMap { value ->
+                        val row = value as? Map<*, *> ?: return@flatMap emptyList<String>()
+                        listOfNotNull((row["userId"] as? Number)?.toLong()?.toString(), row["walletId"]?.toString())
+                    }.toSet()
+                }
+                "realtime.resync" -> onReconnected?.invoke()
                 "meet.updated" -> {
                     val code = dataMap?.get("meetCode")?.toString()
                     if (code != null && watchedMeetings.containsKey(code)) {
@@ -280,30 +315,13 @@ class OnChatWebSocketManager private constructor() {
                     var msg = envelope?.message ?: dataMap?.get("message")?.let { value ->
                         try { moshi.adapter(ApiMessage::class.java).fromJsonValue(value) } catch (_: Exception) { null }
                     }
-                    if (msg == null) {
-                        val d = dataMap ?: rawJsonObj?.optJSONObject("data")?.let { jo ->
-                            val map = mutableMapOf<String, Any?>()
-                            jo.keys().forEach { k -> map[k] = jo.opt(k) }
-                            map
-                        }
-                        val content = d?.get("content")?.toString() ?: rawJsonObj?.optString("content") ?: ""
-                        if (content.isNotEmpty()) {
-                            val sId = d?.get("senderId")?.toString()?.toLongOrNull() ?: envelope?.resolvedUserId
-                            val sName = d?.get("senderName")?.toString() ?: envelope?.userName ?: "Contact"
-                            msg = ApiMessage(
-                                id = d?.get("id")?.toString() ?: "msg_${System.currentTimeMillis()}",
-                                conversationId = convId ?: "conv_1",
-                                senderId = sId,
-                                senderName = sName,
-                                content = content,
-                                timestamp = envelope?.timestamp ?: System.currentTimeMillis().toString(),
-                                createdAt = envelope?.timestamp ?: System.currentTimeMillis().toString(),
-                                status = "delivered",
-                                type = d?.get("type")?.toString() ?: "text"
-                            )
-                        }
+                    if (msg == null || convId.isNullOrBlank()) {
+                        // Never fabricate message/conversation IDs. Recover the authoritative history.
+                        onReconnected?.invoke()
+                        return
                     }
                     if (convId != null && msg != null) {
+                        if (!receivedEvents.claim("message:$convId:${msg.id}", System.currentTimeMillis())) return
                         coroutineScope.launch {
                             _incomingMessages.emit(Pair(convId, msg))
                         }
@@ -343,13 +361,13 @@ class OnChatWebSocketManager private constructor() {
                 "presence.online", "user.online" -> {
                     val uid = envelope?.resolvedWalletId ?: envelope?.resolvedUserId?.toString() ?: rawJsonObj?.optString("walletId")
                     if (uid != null) {
-                        _onlineUsers.value = _onlineUsers.value + uid
+                        _onlineUsers.value = _onlineUsers.value + listOfNotNull(uid, envelope?.resolvedUserId?.toString())
                     }
                 }
                 "presence.offline", "user.offline" -> {
                     val uid = envelope?.resolvedWalletId ?: envelope?.resolvedUserId?.toString() ?: rawJsonObj?.optString("walletId")
                     if (uid != null) {
-                        _onlineUsers.value = _onlineUsers.value - uid
+                        _onlineUsers.value = _onlineUsers.value - listOfNotNull(uid, envelope?.resolvedUserId?.toString()).toSet()
                     }
                 }
 
@@ -379,7 +397,10 @@ class OnChatWebSocketManager private constructor() {
                             ?: d?.get("call_id")?.toString()
                             ?: rawJsonObj?.optString("callId")
                             ?: rawJsonObj?.optString("call_id")
-                            ?: "call_${System.currentTimeMillis()}"
+                            ?: ""
+                        if (callId.isBlank() || !receivedEvents.claim("call:$callId", System.currentTimeMillis())) return
+                        val ringFor = (d?.get("ringForMs") as? Number)?.toLong()?.coerceIn(0L, 25000L) ?: 25000L
+                        if (ringFor <= 0L) return
 
                         val callerName = d?.get("callerName")?.toString()
                             ?: d?.get("caller_name")?.toString()
@@ -403,7 +424,7 @@ class OnChatWebSocketManager private constructor() {
                             callerWalletId = callerWallet,
                             callerAvatar = callAvatar,
                             isVideo = isVideo,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = System.currentTimeMillis() - (25000L - ringFor)
                         )
                         coroutineScope.launch {
                             _incomingCalls.emit(callState)
@@ -421,6 +442,7 @@ class OnChatWebSocketManager private constructor() {
                 // 6. WebRTC Call Signaling (answer, candidate, accepted, rejected, ended)
                 "call.answer", "call.ice_candidate", "call.accepted", "call.rejected", "call.ended", "conference.invite", "call:answer", "call:rejected", "call:ended", "call:hangup" -> {
                     if (envelope != null) {
+                        envelope.resolvedCallId?.let { receivedEvents.claim("call:$it", System.currentTimeMillis()) }
                         coroutineScope.launch {
                             _callSignalingEvents.emit(envelope)
                         }
@@ -446,7 +468,7 @@ class OnChatWebSocketManager private constructor() {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing WS message: ${e.message} text: $text")
+            Log.w(TAG, "Événement temps réel indécodable")
         }
     }
 
@@ -464,7 +486,10 @@ class OnChatWebSocketManager private constructor() {
     }
 
     fun sendReadReceipt(conversationId: String) {
-        if (_connectionStatus.value != WsConnectionStatus.CONNECTED) return
+        if (_connectionStatus.value != WsConnectionStatus.CONNECTED) {
+            coroutineScope.launch { runCatching { ApiClient.apiService.markChatRead(conversationId) } }
+            return
+        }
         try {
             val json = org.json.JSONObject().put("event", "chat.read").put("data",
                 org.json.JSONObject().put("conversationId", conversationId)).toString()
@@ -508,7 +533,11 @@ class OnChatWebSocketManager private constructor() {
     }
 
     fun disconnect() {
+        receivedEvents.clear()
         shouldReconnect = false
+        recoveryJob?.cancel()
+        recoveryJob = null
+        recoveryCursor = null
         reconnectJob?.cancel()
         reconnectJob = null
         isConnecting.set(false)

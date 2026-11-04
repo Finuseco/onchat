@@ -194,8 +194,9 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     val isSkeletonLoading: StateFlow<Boolean> = _isSkeletonLoading.asStateFlow()
 
     // Data streams
-    val conversations: StateFlow<List<Conversation>> = repository.conversationsFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val conversations: StateFlow<List<Conversation>> = combine(repository.conversationsFlow, wsManager.onlineUsers, wsManager.connectionStatus) { list, online, status ->
+        list.map { conversation -> conversation.copy(isOnline = status == com.example.data.api.WsConnectionStatus.CONNECTED && (conversation.contactWalletId?.let { online.contains(it) } == true), contactAvailabilityStatus = if (status == com.example.data.api.WsConnectionStatus.CONNECTED && (conversation.contactWalletId?.let { online.contains(it) } == true)) "online" else "offline") }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val groups: StateFlow<List<Group>> = repository.groupsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -256,6 +257,9 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     // Active call session
     private val _activeCall = MutableStateFlow<CallSessionState?>(null)
     val activeCall: StateFlow<CallSessionState?> = _activeCall.asStateFlow()
+    private val _directCallUrl = MutableStateFlow<String?>(null)
+    val directCallUrl: StateFlow<String?> = _directCallUrl.asStateFlow()
+    fun reportDirectCallConnected(connected: Boolean) { _activeCall.value = _activeCall.value?.copy(isConnected = connected) }
 
     // Real active contacts stream
     val activeContacts: StateFlow<List<ContactCheckResult>> = repository.conversationsFlow
@@ -279,12 +283,24 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         loadCountries()
         checkExistingSession()
         observeWebSocketEvents()
+        viewModelScope.launch {
+            wsManager.socialUpdates.collect { event ->
+                if (event.resolvedEvent == "video.published" || event.resolvedEvent == "social.follow.changed") fetchVideosFeed()
+            }
+        }
         wsManager.onReconnected = {
             fetchServerConversations()
             refreshWallet()
+            viewModelScope.launch {
+                repository.fetchGroups()
+                _activeConversationId.value?.takeIf { it.isNotBlank() }?.let {
+                    repository.fetchConversationDetails(it)
+                    if (OnChatNotificationHelper.appInForeground) runCatching { repository.markConversationMessagesAsRead(it) }
+                }
+            }
         }
 
-        // Active background sync loop to guarantee 100% zero missed messages or statuses (only when authenticated)
+        // Periodic API reconciliation while the ViewModel is active; WebSocket events update immediately.
         viewModelScope.launch {
             while (isActive) {
                 delay(10000) // Reduced frequency to 10s to prevent UI flicker
@@ -313,8 +329,15 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             wsManager.incomingMessages.collect { pair ->
-                repository.insertWebSocketMessage(pair.first, pair.second)
+                if (currentSession.value == null) return@collect
+                try { repository.insertWebSocketMessage(pair.first, pair.second) }
+                catch (error: Exception) {
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    fetchServerConversations()
+                }
+                OnChatNotificationHelper.signedInUserId = currentSession.value?.userId
                 if (pair.second.senderId == currentSession.value?.userId) return@collect
+                if (!OnChatNotificationHelper.appInForeground) return@collect
                 if (_activeConversationId.value == pair.first) wsManager.sendReadReceipt(pair.first)
                 
                 // Play immediate incoming notification sound
@@ -327,14 +350,28 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                         conversationId = pair.first,
                         senderName = pair.second.senderName ?: "Nouveau message",
                         senderWalletId = null,
-                        messageText = pair.second.content
+                        senderAvatar = pair.second.senderAvatar,
+                        messageText = when (pair.second.type) {
+                            "audio" -> "Message vocal"
+                            "image" -> "Photo"
+                            "video" -> "Vidéo"
+                            "doc" -> "Document"
+                            else -> pair.second.content
+                        }
                     )
                 }
             }
         }
         viewModelScope.launch {
             wsManager.incomingCalls.collect { callState ->
+                if (_activeCall.value != null || (_incomingCall.value != null && _incomingCall.value?.callId != callState.callId)) {
+                    currentSession.value?.let { session ->
+                        try { ApiClient.apiService.respondCall(callState.callId, RespondCallRequest(session.walletId, "BUSY")) } catch (_: Exception) { }
+                    }
+                    return@collect
+                }
                 _incomingCall.value = callState
+                if (OnChatNotificationHelper.appInForeground) {
                 RingtoneHelper.playCallRingtone(getApplication())
                 OnChatNotificationHelper.showIncomingCallNotification(
                     context = getApplication(),
@@ -345,11 +382,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     isVideo = callState.isVideo
                 )
 
-                // 25-second ring timeout -> converts to missed call notification
+                }
+                // Share the original ring deadline, including a replay after reconnect.
                 viewModelScope.launch {
-                    delay(25000)
+                    delay((25000L - (System.currentTimeMillis() - callState.timestamp)).coerceIn(0L, 25000L))
                     if (_incomingCall.value?.callId == callState.callId) {
+                        if (!OnChatNotificationHelper.appInForeground) { _incomingCall.value = null; return@launch }
                         val missed = _incomingCall.value
+                        currentSession.value?.let { session ->
+                            try { ApiClient.apiService.respondCall(callState.callId, RespondCallRequest(session.walletId,"MISSED")) } catch (_: Exception) { }
+                        }
                         _incomingCall.value = null
                         RingtoneHelper.stopCallRingtone(getApplication())
                         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
@@ -376,21 +418,36 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
         viewModelScope.launch {
             wsManager.callSignalingEvents.collect { envelope ->
-                when (envelope.event) {
+                when (envelope.resolvedEvent) {
                     "chat.message.read", "chat.read" -> {
                         val conversationId = envelope.resolvedConversationId
                         val readerId = envelope.resolvedUserId
-                        if (conversationId != null && readerId != null && readerId != currentSession.value?.userId) {
-                            repository.markOutgoingMessagesAsRead(conversationId)
+                        if (conversationId != null && readerId != null) {
+                            if (readerId == currentSession.value?.userId) repository.markConversationReadLocally(conversationId)
+                            repository.fetchConversationDetails(conversationId)
+                            fetchServerConversations()
                         }
                     }
-                    "call.accepted", "call.answer" -> {
-                        _activeCall.value?.let { current ->
-                            _activeCall.value = current.copy(isConnected = true)
+                    "call.accepted" -> {
+                        if (_incomingCall.value?.callId == envelope.resolvedCallId) {
+                            _incomingCall.value = null
+                            RingtoneHelper.stopCallRingtone(getApplication())
+                            OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
                         }
                     }
+                    "call.answer" -> { /* Media connectivity is reported by WebRTC. */ }
                     "call.rejected", "call.ended" -> {
-                        endCall()
+                        val id = envelope.resolvedCallId
+                        if (_activeCall.value?.roomId == id) {
+                            _activeCall.value = null
+                            _directCallUrl.value = null
+                            RingtoneHelper.stopCallRingtone(getApplication())
+                        }
+                        if (_incomingCall.value?.callId == id) {
+                            _incomingCall.value = null
+                            RingtoneHelper.stopCallRingtone(getApplication())
+                            OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
+                        }
                     }
                     "conference.invite" -> {
                         val title: String = envelope.data?.get("title")?.toString() ?: "Conférence OnChat"
@@ -482,16 +539,14 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
             result.onSuccess { res ->
                 if (!res.success) { _errorMessage.value = res.error ?: "Abonnement refusé"; onComplete(false); return@onSuccess }
                 if (action == "follow" || action == "unfollow") _realVideosFeed.value = _realVideosFeed.value.map { item -> if (item.publisher?.type == "user" && item.publisher.id == userId) item.copy(follow = VideoFollowInfo(action == "follow")) else item }
+                if (action == "follow" || action == "unfollow") fetchVideosFeed()
                 onComplete(true)
                 // Update local public profile state with new relation/stats in nested object
                 val current = _publicProfile.value
                 val p = current?.profile
                 if (current != null && p != null) {
                     val newRelationship = res.relation?.let {
-                        RelationshipDto(
-                            isFollowing = it.following,
-                            isFollowedBy = it.isFriend
-                        )
+                        p.relationship?.copy(isFollowing = it.following) ?: RelationshipDto(isFollowing = it.following)
                     } ?: p.relationship
 
                     val newFollowers = res.stats?.let {
@@ -571,8 +626,11 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun onOtpChange(otp: String) {
+        if (_loginStep.value != LoginStep.OTP_VERIFY || _authLoading.value || otp.any { it !in '0'..'9' } || otp.length > 6) return
+        val changed = _otpInput.value != otp
         _otpInput.value = otp
         _authError.value = null
+        if (changed && otp.length == 6) submitOtp()
     }
 
     fun onPinChange(pin: String) {
@@ -834,15 +892,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun submitOtp() {
         val otp = _otpInput.value.trim()
-        if (otp.length < 4) {
+        if (_authLoading.value || _loginStep.value != LoginStep.OTP_VERIFY) return
+        if (otp.length != 6 || otp.any { it !in '0'..'9' }) {
             _authError.value = UiAuthError(
                 title = "Code requis",
                 message = "Veuillez entrer le code de vérification reçu."
             )
             return
         }
+        _authLoading.value = true
         viewModelScope.launch {
-            _authLoading.value = true
             _authError.value = null
             val result = repository.verifyOtp(_pendingUserId.value, otp, _walletIdInput.value)
             _authLoading.value = false
@@ -852,6 +911,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 _pinInput.value = ""
                 _successMessage.value = "Code de vérification validé !"
             }.onFailure { err ->
+                _otpInput.value = ""
                 if (err is com.example.data.repository.AuthException) {
                     _authError.value = UiAuthError(err.title, err.detail)
                 } else {
@@ -946,6 +1006,12 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun logout() {
         viewModelScope.launch {
+            val call = _activeCall.value
+            val session = currentSession.value
+            _directCallUrl.value = null
+            if (call != null && !call.roomId.startsWith("pending_") && session != null) {
+                try { ApiClient.apiService.endCall(call.roomId, EndCallRequest(session.walletId)) } catch (_: Exception) { }
+            }
             wsManager.disconnect()
             repository.logout()
             _activeConversationId.value = null
@@ -995,18 +1061,53 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    /** Conversation attachments never use the public reel publication endpoint. */
+    fun sendAttachment(uri: Uri, fileName: String, selectedType: String) {
+        val conversationId = _activeConversationId.value ?: return
+        viewModelScope.launch {
+            try {
+                val context = getApplication<Application>()
+                val fallback = when (selectedType) { "image" -> "image/jpeg"; "audio" -> "audio/mp4"; "video" -> "video/mp4"; else -> "application/octet-stream" }
+                val mime = context.contentResolver.getType(uri) ?: fallback
+                val type = when { mime.startsWith("image/") -> "image"; mime.startsWith("audio/") -> "audio"; mime.startsWith("video/") -> "video"; else -> "doc" }
+                val limit = (if (type == "video") 200 else 25) * 1024 * 1024
+                val bytes = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val block = ByteArray(8192)
+                        while (true) {
+                            val count = input.read(block)
+                            if (count < 0) break
+                            check(output.size().toLong() + count <= limit) { "Fichier trop volumineux." }
+                            output.write(block, 0, count)
+                        }
+                        output.toByteArray()
+                    } ?: error("Impossible de lire ce fichier.")
+                }
+                check(bytes.isNotEmpty()) { "Le fichier est vide." }
+                val path = repository.uploadMedia(bytes, fileName, mime) ?: error("Envoi du fichier refusé. Vérifiez le format et votre connexion.")
+                val url = if (path.startsWith("http")) path else "${ApiClient.BASE_URL.trimEnd('/')}$path"
+                val label = when (type) { "image" -> "Photo"; "audio" -> "Message vocal"; "video" -> "Vidéo"; else -> fileName }
+                repository.sendMessage(conversationId, label, type = type, fileUrl = url, fileName = fileName)
+            } catch (error: kotlinx.coroutines.CancellationException) { throw error }
+            catch (error: Exception) { _errorMessage.value = error.message ?: "Échec de l’envoi du fichier." }
+        }
+    }
+
     fun sendAudioMessage(file: java.io.File) {
         val convId = _activeConversationId.value ?: return
         viewModelScope.launch {
             try {
-                val bytes = file.readBytes()
+                val bytes = withContext(Dispatchers.IO) { file.readBytes() }
                 val fileName = "voice_${System.currentTimeMillis()}.m4a"
-                val url = repository.uploadMedia(bytes, fileName, "audio/mp4")
+                val url = repository.uploadMedia(bytes, fileName, "audio/mp4") ?: error("Envoi du message vocal refusé. Vérifiez votre connexion.")
                 if (url != null) {
                     val finalUrl = if (url.startsWith("http")) url else "https://app.cashpay-all.com$url"
                     repository.sendMessage(convId, "🎤 Note vocale", type = "audio", fileUrl = finalUrl, fileName = fileName)
                 }
-            } catch (e: Exception) {
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                _errorMessage.value = e.message ?: "Échec de l’envoi du message vocal."
                 Log.e("OnChatViewModel", "sendAudioMessage error: ${e.message}")
             }
         }
@@ -1057,8 +1158,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                 _isSkeletonLoading.value = true
             }
             try {
-                repository.fetchConversations()
-            } catch (_: Exception) {}
+                repository.fetchConversations().onFailure { _errorMessage.value = it.message ?: "Synchronisation indisponible" }
+            } catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error }
             _isSkeletonLoading.value = false
         }
     }
@@ -1066,7 +1167,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun fetchConversationDetails(conversationId: String) {
         if (ApiClient.authToken.isNullOrBlank()) return
         viewModelScope.launch {
-            repository.fetchConversationDetails(conversationId)
+            repository.fetchConversationDetails(conversationId).onFailure { _errorMessage.value = it.message ?: "Messages indisponibles" }
         }
     }
 
@@ -1149,30 +1250,96 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     // --- CashPay Real Videos Feed Actions ---
 
     private var hasMoreVideos = true
+    private val _videoFeed = MutableStateFlow("mine")
+    val videoFeed = _videoFeed.asStateFlow()
+    private var videoFeedEpoch = 0
+    fun selectVideoFeed(feed:String) {
+        if (feed !in setOf("mine","following","explore","favorites")) return
+        _videoFeed.value=feed
+        fetchVideosFeed()
+    }
+    suspend fun openSharedVideo(id:Long) {
+        val epoch=++videoFeedEpoch
+        _videoFeed.value="explore"
+        _realVideosFeed.value=emptyList()
+        _isVideosLoading.value=true
+        try {
+            val response=com.example.data.api.ApiClient.apiService.getVideoDetail(id)
+            val video=response.body()?.video
+            if(epoch!=videoFeedEpoch)return
+            if(!response.isSuccessful || response.body()?.success!=true || video==null) { _errorMessage.value="Vidéo indisponible";return }
+            _realVideosFeed.value=listOf(video)
+            hasMoreVideos=false
+        } catch(error:Exception) {if(error is kotlinx.coroutines.CancellationException)throw error;if(epoch==videoFeedEpoch)_errorMessage.value="Vidéo indisponible. Vérifiez votre connexion."}
+        finally {if(epoch==videoFeedEpoch)_isVideosLoading.value=false}
+    }
+    suspend fun setOriginalSoundRights(id:Long,enabled:Boolean):com.example.data.model.ReusableSound {
+        val response=com.example.data.api.ApiClient.apiService.updateOriginalSound(id,mapOf("allowReuse" to enabled,"rightsConfirmed" to enabled))
+        return response.body()?.takeIf {response.isSuccessful && it.success}?.sound ?: error("Impossible de modifier les droits du son.")
+    }
+    fun toggleVideoFavorite(id:Long,selected:Boolean,onComplete:(Boolean)->Unit={}) {
+        viewModelScope.launch {
+            try {
+                val response=if(selected)com.example.data.api.ApiClient.apiService.unfavoriteVideo(id) else com.example.data.api.ApiClient.apiService.favoriteVideo(id)
+                val body=response.body()?.takeIf {response.isSuccessful && it.success} ?: error("Favoris non confirmés")
+                fun update(video:VideoItem)=if(video.id==id)video.copy(interactions=(video.interactions?:VideoInteractions()).copy(isFavorite=body.isFavorite,favorites=body.favorites)) else video
+                _realVideosFeed.value=_realVideosFeed.value.map(::update)
+                _profileVideos.value=_profileVideos.value.mapValues {(_,list)->list.map(::update)}
+                if(_videoFeed.value=="favorites" && !body.isFavorite)_realVideosFeed.value=_realVideosFeed.value.filterNot{it.id==id}
+                onComplete(true)
+            } catch(error:Exception) {if(error is kotlinx.coroutines.CancellationException)throw error;_errorMessage.value="Favoris indisponibles. Réessayez.";onComplete(false)}
+        }
+    }
     fun loadMoreVideos() {
         if (_isVideosLoading.value || !hasMoreVideos) return
+        val epoch=videoFeedEpoch
+        val feed=_videoFeed.value
         viewModelScope.launch {
             _isVideosLoading.value = true
             try {
-                repository.fetchVideos(limit = 50, offset = _realVideosFeed.value.size).onSuccess { next ->
+                repository.fetchVideos(limit = 50, offset = _realVideosFeed.value.size,feed=feed).onSuccess { next ->
+                    if(epoch!=videoFeedEpoch)return@onSuccess
                     hasMoreVideos = next.size == 50
                     _realVideosFeed.value = (_realVideosFeed.value + next).distinctBy { it.id }
-                }.onFailure { _errorMessage.value = "Chargement des vidéos impossible." }
-            } finally { _isVideosLoading.value = false }
+                }.onFailure { if(epoch==videoFeedEpoch)_errorMessage.value = "Chargement des vidéos impossible." }
+            } finally { if(epoch==videoFeedEpoch)_isVideosLoading.value = false }
+        }
+    }
+
+    val socialUpdates = wsManager.socialUpdates
+    private val _profileVideos = MutableStateFlow<Map<Long, List<VideoItem>>>(emptyMap())
+    val profileVideos = _profileVideos.asStateFlow()
+    private val _profileVideoMore = MutableStateFlow<Map<Long, Boolean>>(emptyMap())
+    val profileVideoMore = _profileVideoMore.asStateFlow()
+    private val loadingProfileVideos = mutableSetOf<Long>()
+    private val _profileVideosLoading = MutableStateFlow<Set<Long>>(emptySet())
+    val profileVideosLoading = _profileVideosLoading.asStateFlow()
+    fun fetchProfileVideos(userId: Long, append: Boolean = false) {
+        if (userId <= 0 || !loadingProfileVideos.add(userId)) return
+        _profileVideosLoading.value = loadingProfileVideos.toSet()
+        viewModelScope.launch {
+            val current = _profileVideos.value[userId].orEmpty()
+            try {
+                repository.fetchVideos(50, if (append) current.size else 0, userId).onSuccess { next ->
+                    val merged = if (append) current + next else next + current
+                    _profileVideos.value = _profileVideos.value + (userId to merged.distinctBy { it.id })
+                    if (append || current.isEmpty()) _profileVideoMore.value = _profileVideoMore.value + (userId to (next.size == 50))
+                }.onFailure { _errorMessage.value = "Vidéos du profil indisponibles. Réessayez." }
+            } finally { loadingProfileVideos.remove(userId); _profileVideosLoading.value = loadingProfileVideos.toSet() }
         }
     }
 
     fun fetchVideosFeed() {
+        val epoch=++videoFeedEpoch
+        val feed=_videoFeed.value
+        _realVideosFeed.value=emptyList()
         viewModelScope.launch {
-            _isVideosLoading.value = true
-            val result = repository.fetchVideos(limit = 50, offset = 0)
-            _isVideosLoading.value = false
-            result.onSuccess { list ->
-                _realVideosFeed.value = list
-                hasMoreVideos = list.size == 50
-            }.onFailure { err ->
-                Log.w("OnChatViewModel", "fetchVideosFeed error: ${err.message}")
-            }
+            _isVideosLoading.value=true
+            try {
+                repository.fetchVideos(limit=50,offset=0,feed=feed).onSuccess {list->
+                    if(epoch==videoFeedEpoch){_realVideosFeed.value=list;hasMoreVideos=list.size==50}
+                }.onFailure {if(epoch==videoFeedEpoch)_errorMessage.value="Chargement des vidéos impossible."}
+            } finally {if(epoch==videoFeedEpoch)_isVideosLoading.value=false}
         }
     }
 
@@ -1206,13 +1373,13 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun loadVideoComments(videoId: Long, onResult: (List<VideoCommentItem>) -> Unit) {
+    fun loadVideoComments(videoId: Long, onFailure: (String) -> Unit, onResult: (List<VideoCommentItem>) -> Unit) {
         viewModelScope.launch {
             val result = repository.getVideoComments(videoId)
             result.onSuccess { list ->
                 onResult(list)
             }.onFailure {
-                onResult(emptyList())
+                onFailure("Impossible de charger les commentaires. Vérifiez la connexion puis réessayez.")
             }
         }
     }
@@ -1428,8 +1595,8 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
     fun onEnterChat(conversationId: String) {
         _activeConversationId.value = conversationId
         viewModelScope.launch {
-            repository.markConversationMessagesAsRead(conversationId)
-            wsManager.sendReadReceipt(conversationId)
+            try { repository.markConversationMessagesAsRead(conversationId) }
+            catch (error: Exception) { if (error is kotlinx.coroutines.CancellationException) throw error; _errorMessage.value = error.message }
             // Force re-fetch to ensure UI gets updated state
             repository.fetchConversationDetails(conversationId)
         }
@@ -1611,84 +1778,23 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     // --- Audio & Video Calls ---
 
-    fun startCall(
-        peerName: String,
-        peerWalletId: String = "",
-        peerAvatar: String? = null,
-        isVideo: Boolean = false,
-        autoConnect: Boolean = false
-    ) {
-        val roomId = "call_${System.currentTimeMillis()}"
-        _activeCall.value = CallSessionState(
-            roomId = roomId,
-            peerName = peerName,
-            peerWalletId = peerWalletId,
-            peerAvatar = peerAvatar,
-            isVideo = isVideo,
-            isConnected = autoConnect,
-            isMuted = false,
-            isSpeakerOn = true,
-            isCameraFacingBack = false,
-            durationSeconds = 0
-        )
-
-        OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-
-        // Send real-time call signaling through WebSocket
-        if (!autoConnect) {
-            wsManager.sendCallSignaling(
-                event = "call.offer",
-                callId = roomId,
-                conversationId = null,
-                data = mapOf(
-                    "peerWalletId" to peerWalletId,
-                    "peerName" to peerName,
-                    "isVideo" to isVideo.toString()
-                )
-            )
-        }
-
+    fun startCall(peerName: String, peerWalletId: String = "", peerAvatar: String? = null, isVideo: Boolean = false, autoConnect: Boolean = false) {
+        if (_activeCall.value != null) return
+        val session = currentSession.value ?: return
+        if (peerWalletId.isBlank()) { _errorMessage.value = "Le portefeuille du correspondant est requis."; return }
+        val pendingId = "pending_${java.util.UUID.randomUUID()}"
+        _activeCall.value = CallSessionState(pendingId, peerName, peerWalletId, peerAvatar, isVideo)
         viewModelScope.launch {
-            // Forward recorded microphone audio chunks to remote peer via WebSocket
-            voiceCallManager.onLocalAudioChunk = { chunk ->
-                val current = _activeCall.value
-                if (current != null && current.isConnected) {
-                    val base64 = android.util.Base64.encodeToString(chunk, android.util.Base64.NO_WRAP)
-                    wsManager.sendCallSignaling(
-                        event = "call.audio",
-                        callId = current.roomId,
-                        conversationId = null,
-                        data = mapOf(
-                            "audio" to base64,
-                            "peerWalletId" to current.peerWalletId
-                        )
-                    )
-                }
-            }
-
-            // Start real duplex microphone & audio playback
-            voiceCallManager.startVoiceSession()
-
-            // Record initial call entry
-            repository.recordCall(
-                peerName = peerName,
-                isVideo = isVideo,
-                isIncoming = autoConnect,
-                isMissed = false,
-                durationSeconds = 0,
-                peerWalletId = peerWalletId.ifBlank { null },
-                peerAvatar = peerAvatar
-            )
-
-            // Duration counter starts counting ONLY when connected (after remote peer answers)
-            while (_activeCall.value != null) {
-                delay(1000)
-                _activeCall.value?.let { current ->
-                    if (current.isConnected) {
-                        _activeCall.value = current.copy(durationSeconds = current.durationSeconds + 1)
-                    }
-                }
-            }
+            try {
+                val response = ApiClient.apiService.initiateCall(InitiateCallRequest(session.walletId, peerWalletId, isVideo))
+                val result = response.body()
+                val call = result?.call
+                check(response.isSuccessful && result?.success == true && call?.joinUrl != null) { result?.error ?: "Impossible de lancer l’appel." }
+                if (_activeCall.value?.roomId != pendingId) { ApiClient.apiService.endCall(call!!.id, EndCallRequest(session.walletId)); return@launch }
+                _activeCall.value = _activeCall.value?.copy(roomId = call!!.id)
+                _directCallUrl.value = call!!.joinUrl + "?accepted=1"
+            } catch(error: kotlinx.coroutines.CancellationException) { throw error }
+            catch(error: Exception) { if (_activeCall.value?.roomId == pendingId) { _activeCall.value = null; _directCallUrl.value = null }; _errorMessage.value = error.message }
         }
     }
 
@@ -1796,32 +1902,16 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun endCall() {
         val current = _activeCall.value
+        _activeCall.value = null
+        _directCallUrl.value = null
         voiceCallManager.stopVoiceSession()
         RingtoneHelper.stopCallRingtone(getApplication())
         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-
-        if (current != null) {
-            wsManager.sendCallSignaling(
-                event = "call.ended",
-                callId = current.roomId,
-                conversationId = null,
-                data = mapOf("peerWalletId" to current.peerWalletId)
-            )
-            if (current.durationSeconds > 0) {
-                viewModelScope.launch {
-                    repository.recordCall(
-                        peerName = current.peerName,
-                        isVideo = current.isVideo,
-                        isIncoming = false,
-                        isMissed = false,
-                        durationSeconds = current.durationSeconds,
-                        peerWalletId = current.peerWalletId.ifBlank { null },
-                        peerAvatar = current.peerAvatar
-                    )
-                }
-            }
+        val session = currentSession.value
+        if (current != null && !current.roomId.startsWith("pending_") && session != null) viewModelScope.launch {
+            try { ApiClient.apiService.endCall(current.roomId, EndCallRequest(session.walletId)) }
+            catch(error: Exception) { _errorMessage.value = "Fin d’appel non confirmée par le serveur. Vérifiez votre connexion." }
         }
-        _activeCall.value = null
     }
 
     // --- Ringtone Customization ---
@@ -1835,60 +1925,34 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
 
     fun acceptIncomingCall() {
         val inc = _incomingCall.value ?: return
+        val session = currentSession.value ?: return
+        if (_activeCall.value != null) return
         _incomingCall.value = null
         RingtoneHelper.stopCallRingtone(getApplication())
         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-
-        // Send call.accepted signaling back to caller via WebSocket
-        wsManager.sendCallSignaling(
-            event = "call.accepted",
-            callId = inc.callId,
-            conversationId = null,
-            data = mapOf(
-                "peerWalletId" to inc.callerWalletId,
-                "callerWalletId" to inc.callerWalletId
-            )
-        )
-
-        startCall(
-            peerName = inc.callerName,
-            peerWalletId = inc.callerWalletId,
-            peerAvatar = inc.callerAvatar,
-            isVideo = inc.isVideo,
-            autoConnect = true
-        )
+        _activeCall.value = CallSessionState(inc.callId, inc.callerName, inc.callerWalletId, inc.callerAvatar, inc.isVideo)
+        viewModelScope.launch {
+            try {
+                val response = ApiClient.apiService.respondCall(inc.callId, RespondCallRequest(session.walletId, "ACCEPTED"))
+                val result = response.body()
+                val url = result?.call?.joinUrl
+                check(response.isSuccessful && result?.success == true && !url.isNullOrBlank()) { result?.error ?: "Cet appel n’est plus disponible." }
+                if (_activeCall.value?.roomId != inc.callId) { ApiClient.apiService.endCall(inc.callId, EndCallRequest(session.walletId)); return@launch }
+                _directCallUrl.value = url + "?accepted=1"
+            } catch(error: kotlinx.coroutines.CancellationException) { throw error }
+            catch(error: Exception) { _activeCall.value = null; _directCallUrl.value = null; _errorMessage.value = error.message }
+        }
     }
 
     fun declineIncomingCall() {
-        val inc = _incomingCall.value
+        val inc = _incomingCall.value ?: return
         _incomingCall.value = null
         RingtoneHelper.stopCallRingtone(getApplication())
         OnChatNotificationHelper.cancelIncomingCallNotification(getApplication())
-        if (inc != null) {
-            // Send call.rejected signaling back via WebSocket
-            wsManager.sendCallSignaling(
-                event = "call.rejected",
-                callId = inc.callId,
-                conversationId = null,
-                data = mapOf("peerWalletId" to inc.callerWalletId)
-            )
-            viewModelScope.launch {
-                repository.recordCall(
-                    peerName = inc.callerName,
-                    isVideo = inc.isVideo,
-                    isIncoming = true,
-                    isMissed = true,
-                    durationSeconds = 0,
-                    peerWalletId = inc.callerWalletId,
-                    peerAvatar = inc.callerAvatar
-                )
-                OnChatNotificationHelper.showMissedCallNotification(
-                    context = getApplication(),
-                    callerName = inc.callerName,
-                    callerWalletId = inc.callerWalletId.ifBlank { null },
-                    isVideo = inc.isVideo
-                )
-            }
+        val session = currentSession.value ?: return
+        viewModelScope.launch {
+            try { ApiClient.apiService.respondCall(inc.callId, RespondCallRequest(session.walletId,"REJECTED")) }
+            catch(error: Exception) { _errorMessage.value = "Refus non confirmé par le serveur." }
         }
     }
 
@@ -2392,7 +2456,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
         val current = _activeMeeting.value ?: return
         viewModelScope.launch {
             meetingsRepository.getMeetingParticipants(current.meetCode).onSuccess { res ->
-                val myUserId = ApiClient.currentUserId ?: 101L
+                val myUserId = ApiClient.currentUserId ?: currentSession.value?.userId ?: return@onSuccess
                 val me = res.participants.firstOrNull { it.userId == myUserId }
                 _activeMeeting.value = current.copy(
                     participants = res.participants,
@@ -2424,7 +2488,7 @@ class OnChatViewModel(application: Application) : AndroidViewModel(application) 
                     priceAmount = res.priceAmount ?: priceAmount,
                     priceCurrency = res.priceCurrency ?: priceCurrency,
                     isPaid = priceAmount > 0,
-                    hostUserId = ApiClient.currentUserId ?: 101L
+                    hostUserId = ApiClient.currentUserId ?: currentSession.value?.userId ?: return@onSuccess
                 )
                 _activeMeetingBilling.value = updated
                 _activeMeeting.value = current.copy(billing = updated)

@@ -77,6 +77,7 @@ data class VideoPublisher(
 
 @JsonClass(generateAdapter = true)
 data class VideoInteractions(
+    val isFavorite: Boolean = false, val favorites: Int = 0,
     @Json(name = "likes") val likes: Int? = 0,
     @Json(name = "likesCount") val likesCount: Int? = 0,
     @Json(name = "comments") val comments: Int? = 0,
@@ -104,6 +105,7 @@ data class VideoFollowInfo(
 
 @JsonClass(generateAdapter = true)
 data class VideoItem(
+    val sound: ReusableSound? = null,
     @Json(name = "id") val id: Long = 0L,
     @Json(name = "url") val url: String? = null,
     @Json(name = "videoUrl") val videoUrl: String? = null,
@@ -153,3 +155,6 @@ data class VideoCommentItem(
     @Json(name = "user") val user: VideoCommentUser? = null,
     @Json(name = "createdAt") val createdAt: String? = null
 )
+
+@JsonClass(generateAdapter = true)
+data class VideoFavoriteResponse(val success:Boolean=false,val isFavorite:Boolean=false,val favorites:Int=0)

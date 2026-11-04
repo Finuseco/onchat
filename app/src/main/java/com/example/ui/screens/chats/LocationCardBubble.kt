@@ -30,131 +30,20 @@ import com.example.data.model.Message
 import com.example.ui.theme.*
 
 @Composable
-fun LocationCardBubble(
-    message: Message,
-    timeFormatted: String
-) {
-    val context = LocalContext.current
-
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = CashPayNavySurface),
-        border = CardDefaults.outlinedCardBorder().copy(
-            brush = Brush.horizontalGradient(listOf(OnChatCyan.copy(alpha = 0.6f), OnChatViolet.copy(alpha = 0.6f)))
-        ),
-        modifier = Modifier
-            .widthIn(min = 250.dp, max = 290.dp)
-            .clickable {
-                try {
-                    val gmmIntentUri = Uri.parse("geo:-4.3217,15.3126?q=Kinshasa")
-                    val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri)
-                    context.startActivity(mapIntent)
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Ouverture de la carte : Kinshasa", Toast.LENGTH_SHORT).show()
-                }
-            }
-    ) {
-        Column {
-            // Map Snapshot Canvas
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(130.dp)
-                    .background(Color(0xFF1E2B45))
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val w = size.width
-                    val h = size.height
-
-                    drawRect(Color(0xFF19253C))
-
-                    // Road paths
-                    val roadColor = Color(0xFF2C3E63)
-                    drawLine(roadColor, Offset(0f, h * 0.4f), Offset(w, h * 0.6f), strokeWidth = 10f)
-                    drawLine(roadColor, Offset(w * 0.3f, 0f), Offset(w * 0.8f, h), strokeWidth = 8f)
-                    drawLine(roadColor.copy(alpha = 0.5f), Offset(0f, h * 0.75f), Offset(w, h * 0.25f), strokeWidth = 5f)
-
-                    // User pulse
-                    drawCircle(OnChatCyan.copy(alpha = 0.2f), radius = 35f, center = Offset(w / 2f, h / 2f))
-                }
-
-                // Center Pin
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = Color(0xFFE53935),
-                    modifier = Modifier
-                        .size(36.dp)
-                        .align(Alignment.Center)
-                        .offset(y = (-10).dp)
-                )
-
-                Surface(
-                    color = Color.Black.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(6.dp)
-                ) {
-                    Text(
-                        text = "Google Maps",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-                    )
-                }
-            }
-
-            // Location Info & Actions
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = message.content.substringBefore(" • ").ifBlank { "Position partagée" },
-                    color = Color.White,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = message.content.substringAfter(" • ").ifBlank { "Kinshasa, Gombe, RDC" },
-                    color = CashPayGrey,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Ouvrir l'itinéraire",
-                        color = OnChatCyan,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = timeFormatted,
-                            color = CashPayGrey,
-                            fontSize = 11.sp
-                        )
-                        if (message.isMine) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Default.DoneAll,
-                                contentDescription = "Délivré",
-                                tint = OnChatCyan,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
+fun LocationCardBubble(message: Message, timeFormatted:String) {
+ val context=LocalContext.current
+ val lat=message.metadata?.get("latitude")?.toDoubleOrNull()
+ val lng=message.metadata?.get("longitude")?.toDoubleOrNull()
+ val valid=lat!=null&&lng!=null&&lat.isFinite()&&lng.isFinite()&&lat in -90.0..90.0&&lng in -180.0..180.0
+ Card(modifier=Modifier.widthIn(min=220.dp,max=300.dp),colors=CardDefaults.cardColors(containerColor=CashPayNavySurface)){
+  Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){
+   Icon(Icons.Default.LocationOn,null,tint=OnChatCyan)
+   Text(message.metadata?.get("title") ?: "Position partagée",color=Color.White,fontWeight=FontWeight.Bold)
+   Text(if(valid) "$lat, $lng" else "Coordonnées indisponibles pour ce message",color=CashPayGrey)
+   if(valid)TextButton(onClick={runCatching{context.startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://www.google.com/maps?q=$lat,$lng")))}.onFailure{Toast.makeText(context,"Aucune application de cartes disponible",Toast.LENGTH_LONG).show()}}){Text("Ouvrir la position")}
+   Text(timeFormatted,color=CashPayGrey,fontSize=11.sp)
+  }
+ }
 }
 
 @Composable

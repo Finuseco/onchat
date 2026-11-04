@@ -20,8 +20,8 @@ import com.example.util.RingtoneHelper
 import kotlinx.coroutines.*
 
 /**
- * OnChat 24/7 Background Service
- * Keeps WebSocket connection active in background just like WhatsApp.
+ * OnChat background WebSocket service
+ * Maintains a visible connection while Android permits the foreground service.
  * Wakes up device screen, triggers real-time incoming call ringtone, and handles incoming messages.
  */
 class OnChatBackgroundService : Service() {
@@ -31,17 +31,36 @@ class OnChatBackgroundService : Service() {
         private const val NOTIF_CHANNEL_ID = "onchat_persistent_service"
         private const val NOTIF_ID = 7001
 
+        fun mediaState(context: Context, active: Boolean, video: Boolean = false) {
+            try {
+                context.startService(Intent(context, OnChatBackgroundService::class.java).apply {
+                    action = "ONCHAT_MEDIA_STATE"
+                    putExtra("active", active)
+                    putExtra("video", video)
+                })
+            } catch (e: Exception) {
+                Log.w(TAG, "Cannot start service for mediaState: ${e.message}")
+            }
+        }
+
         fun start(context: Context) {
-            val intent = Intent(context, OnChatBackgroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            try {
+                val intent = Intent(context, OnChatBackgroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Cannot start foreground service: ${e.message}")
             }
         }
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var mediaActive = false
+    private var ringingCall: com.example.data.model.IncomingCallNotificationState? = null
+    private var ringDeadline: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
@@ -63,15 +82,54 @@ class OnChatBackgroundService : Service() {
         }
 
         val wsManager = OnChatWebSocketManager.getInstance()
-        wsManager.connect()
-
-        observeEvents(wsManager)
+        serviceScope.launch {
+            val session = com.example.data.db.AppDatabase.getDatabase(applicationContext).sessionDao().getSession()
+            if (session == null) {
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        stopForeground(true)
+                    }
+                    stopSelf()
+                }
+                return@launch
+            }
+            com.example.data.api.SessionTokenStore.init(applicationContext)
+            com.example.data.api.ApiClient.authToken = session.token
+            com.example.data.api.ApiClient.activeWalletId = session.walletId
+            OnChatNotificationHelper.signedInUserId = session.userId
+            observeEvents(wsManager)
+            wsManager.connect()
+        }
     }
 
     private fun observeEvents(wsManager: OnChatWebSocketManager) {
+        serviceScope.launch {
+            wsManager.connectionStatus.collect {
+                (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, buildForegroundNotification())
+            }
+        }
         // 1. Incoming calls: Wake up phone and ring
         serviceScope.launch {
             wsManager.incomingCalls.collect { callState ->
+                if (mediaActive || (ringingCall != null && ringingCall?.callId != callState.callId)) return@collect
+                ringingCall = callState
+                ringDeadline?.cancel()
+                ringDeadline = serviceScope.launch {
+                    delay((25000L - (System.currentTimeMillis() - callState.timestamp)).coerceIn(0L, 25000L))
+                    if (ringingCall?.callId != callState.callId) return@launch
+                    ringingCall = null
+                    if (OnChatNotificationHelper.appInForeground) return@launch
+                    RingtoneHelper.stopCallRingtone(applicationContext)
+                    OnChatNotificationHelper.cancelIncomingCallNotification(applicationContext)
+                    OnChatNotificationHelper.showMissedCallNotification(applicationContext, callState.callerName, callState.callerWalletId.ifBlank { null }, callState.isVideo)
+                    val session = com.example.data.db.AppDatabase.getDatabase(applicationContext).sessionDao().getSession() ?: return@launch
+                    try { com.example.data.api.ApiClient.apiService.respondCall(callState.callId, com.example.data.model.RespondCallRequest(session.walletId, "MISSED")) }
+                    catch (error: Exception) { if (error is CancellationException) throw error }
+                }
+                if (OnChatNotificationHelper.appInForeground) return@collect
                 wakeUpPhoneScreen()
                 RingtoneHelper.playCallRingtone(applicationContext)
                 OnChatNotificationHelper.showIncomingCallNotification(
@@ -85,16 +143,52 @@ class OnChatBackgroundService : Service() {
             }
         }
 
+        serviceScope.launch {
+            wsManager.callSignalingEvents.collect { event ->
+                if (event.resolvedEvent in setOf("call.accepted", "call.rejected", "call.ended") && event.resolvedCallId == ringingCall?.callId) {
+                    ringingCall = null
+                    ringDeadline?.cancel()
+                    RingtoneHelper.stopCallRingtone(applicationContext)
+                    OnChatNotificationHelper.cancelIncomingCallNotification(applicationContext)
+                }
+            }
+        }
+
+        serviceScope.launch {
+            wsManager.socialUpdates.collect { event ->
+                if (event.resolvedEvent == "video.published") {
+                    val id = (event.data?.get("mediaId") as? Number)?.toLong() ?: return@collect
+                    val publisher = (event.data?.get("publisherId") as? Number)?.toLong()
+                    if (publisher != OnChatNotificationHelper.signedInUserId) OnChatNotificationHelper.showVideoPublishedNotification(applicationContext,id,event.data?.get("publisherName")?.toString() ?: "Votre créateur suivi",event.data?.get("publisherAvatar")?.toString())
+                }
+            }
+        }
         // 2. Incoming messages
         serviceScope.launch {
+            val repository = com.example.data.repository.OnChatRepository(applicationContext)
             wsManager.incomingMessages.collect { pair ->
+                // The ViewModel owns foreground ingestion; persist here while its UI is absent.
+                if (OnChatNotificationHelper.appInForeground) return@collect
+                try { repository.insertWebSocketMessage(pair.first, pair.second) }
+                catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    Log.w(TAG, "Unable to persist incoming message")
+                }
+                if (pair.second.senderId == OnChatNotificationHelper.signedInUserId) return@collect
                 RingtoneHelper.playNotificationSound(applicationContext)
                 OnChatNotificationHelper.showMessageNotification(
                     context = applicationContext,
                     conversationId = pair.first,
                     senderName = pair.second.senderName ?: "Message OnChat",
                     senderWalletId = null,
-                    messageText = pair.second.content
+                    senderAvatar = pair.second.senderAvatar,
+                    messageText = when (pair.second.type) {
+                        "audio" -> "Message vocal"
+                        "image" -> "Photo"
+                        "video" -> "Vidéo"
+                        "doc" -> "Document"
+                        else -> pair.second.content
+                    }
                 )
             }
         }
@@ -143,10 +237,11 @@ class OnChatBackgroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val connected = OnChatWebSocketManager.getInstance().connectionStatus.value == com.example.data.api.WsConnectionStatus.CONNECTED
         return NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
-            .setContentTitle("OnChat Connecté")
-            .setContentText("En attente d'appels et messages en temps réel 24/7")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(if (mediaActive) "Appel OnChat en cours" else if (connected) "OnChat connecté" else "Reconnexion OnChat…")
+            .setContentText(if (connected) "Messages et appels en temps réel" else "Vérifiez votre connexion Internet")
+            .setSmallIcon(R.drawable.ic_onchat_notification)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
@@ -154,13 +249,33 @@ class OnChatBackgroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "ONCHAT_MEDIA_STATE") {
+            mediaActive = intent.getBooleanExtra("active", false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val microphone = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                val camera = androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                var types = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                if (mediaActive && microphone) {
+                    types = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                    if (intent.getBooleanExtra("video", false) && camera) types = types or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                }
+                try { startForeground(NOTIF_ID, buildForegroundNotification(), types) }
+                catch(error: Exception) { Log.w(TAG, "Media foreground service unavailable", error) }
+            }
+        }
         OnChatWebSocketManager.getInstance().connect()
         return START_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) { stopSelf() }
+
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
+        if (ringingCall != null) {
+            RingtoneHelper.stopCallRingtone(applicationContext)
+            OnChatNotificationHelper.cancelIncomingCallNotification(applicationContext)
+        }
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
